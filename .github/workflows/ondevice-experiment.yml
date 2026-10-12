@@ -29,7 +29,7 @@ jobs:
 
           function Start-Engine($extra) {
             Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-            $args = @("--headless=new", "--user-data-dir=$prof", "--no-first-run", "--remote-debugging-port=9333",
+            $args = @("--user-data-dir=$prof", "--window-position=-2400,-2400", "--no-first-run", "--remote-debugging-port=9333",
                       "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
                       "--use-file-for-fake-audio-capture=$dir\ko.wav", "--enable-logging", "--v=0") + $extra + @("http://localhost:8799/")
             Start-Process $chrome -ArgumentList $args | Out-Null
@@ -48,10 +48,10 @@ jobs:
           Run "net: google reachable?" 0 netcheck.js
           Run "install" 0 install.js 0
           Run "available" 0 local_avail.js
-          Run "CLOUD default mic" 20 local_mic_off.js
-          Run "LOCAL default mic" 25 local_mic_on.js
-          Run "LOCAL track" 25 local_track.js
-          Run "CLOUD track" 20 cloud_track.js
+          Run "LOCAL track (headful)" 25 local_track.js
+          Start-Sleep 20
+          Run "available (after wait)" 0 local_avail.js
+          Run "LOCAL track (headful, retry)" 25 local_track.js
           Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
           "===== chrome log (speech/soda)"
           Get-Content "$prof\chrome_debug.log" -ErrorAction SilentlyContinue | Select-String -Pattern "soda|speech|Speech|SODA|on_device|recogni" | Select-Object -Last 40
