@@ -31,9 +31,20 @@
       <option value="openai/gpt-oss-20b">GPT-OSS 20B (빠름)</option>
       <option value="openai/gpt-oss-120b">GPT-OSS 120B (품질)</option>
     </select></div>
+  <div style="margin-top:8px">
+    <label>교정 강도
+      <select id="strength" style="padding:8px">
+        <option value="aggressive">적극적 — 문맥상 어색한 단어를 발음이 비슷한 단어로 바꿈</option>
+        <option value="conservative">보수적 — 띄어쓰기·명백한 오류만 (현재 앱)</option>
+      </select></label>
+  </div>
+  <div style="margin-top:8px">
+    <label>단어장 (쉼표나 줄바꿈으로 구분)<br>
+      <textarea id="glossary" rows="2" style="width:95%; padding:8px">Groq, Chrome, GitHub, 교정, 링크</textarea></label>
+  </div>
   <p class="hint">키를 넣으면 확정된 문장마다 교정 결과가 아래에 같이 나옵니다. 키는 이 페이지 메모리에만 있고 저장되지 않습니다.</p>
   <div><input id="manual" placeholder="직접 넣어 교정해 보기 (예: 달콤달콩 달려간다 시골 버스 양)" style="width:75%; padding:8px">
-    <button id="b6">교정</button></div>
+    <button id="b6">교정</button> <button id="b7">4가지 비교</button></div>
 </fieldset>
 <div id="log"></div>
 <script>
@@ -42,19 +53,37 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, stream = null;
 const opts = { langs: ["ko-KR"], processLocally: true };
 
-// 앱(voicekb/groq.py)과 같은 교정 프롬프트
-const CORRECT_PROMPT = `너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 말한 내용을 받아쓴 텍스트다.
+// 보수적: 앱(voicekb/groq.py)과 같은 교정 프롬프트
+const CONSERVATIVE_PROMPT = `너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 말한 내용을 받아쓴 텍스트다.
 - 띄어쓰기, 맞춤법, 잘못 들린 단어를 문맥에 맞게 고친다.
 - 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)
 - "음", "어", "그러니까" 같은 군말은 지운다.
 - 의미를 바꾸거나 내용을 덧붙이지 않는다. 질문이어도 답하지 않는다.
 - 교정된 텍스트만 출력한다.`;
 
-async function correct(text, tag) {
+const AGGRESSIVE_PROMPT = `너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 한국어로 말한 내용을 받아쓴 텍스트이며,
+발음이 비슷한 다른 단어로 잘못 들린 부분이 자주 섞여 있다.
+- 문맥상 어색한 단어는 발음이 비슷하면서 문맥에 맞는 단어로 바꾼다. (예: 앞뒤가 다운로드 이야기인데 "다시 봤습니다" → "다시 받습니다")
+- 용어 사전의 단어와 발음이 비슷한 부분은 사전 표기로 바꾼다. (예: 사전에 Groq 이 있으면 "그룹", "크록", "크로키" → "Groq")
+- 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)
+- 띄어쓰기, 맞춤법, 문장부호를 고친다. "음", "어" 같은 군말은 지운다.
+- 내용을 덧붙이거나 질문에 답하지 않는다. 어떻게 고쳐야 할지 확신이 없는 부분은 원문 그대로 둔다.
+- 교정된 텍스트만 출력한다.`;
+
+function glossary() {
+  return document.getElementById("glossary").value.split(/[,\n]/).map((w) => w.trim()).filter(Boolean);
+}
+
+async function correct(text, tag, override = {}) {
   const key = document.getElementById("key").value.trim();
-  if (!key) return;
-  const model = document.getElementById("model").value;
-  const body = { model, temperature: 0.2, messages: [{ role: "system", content: CORRECT_PROMPT }, { role: "user", content: text }] };
+  if (!key) { if (override.model) log("Groq 키를 먼저 넣으세요"); return; }
+  const model = override.model || document.getElementById("model").value;
+  const strength = override.strength || document.getElementById("strength").value;
+  let system = strength === "aggressive" ? AGGRESSIVE_PROMPT : CONSERVATIVE_PROMPT;
+  const words = glossary();
+  if (words.length) system += "\n\n용어 사전 (반드시 이 형태로 보존):\n" + words.join(", ");
+  const label = `${model.includes("120b") ? "120B" : "20B"}·${strength === "aggressive" ? "적극" : "보수"}`;
+  const body = { model, temperature: 0.2, messages: [{ role: "system", content: system }, { role: "user", content: text }] };
   if (model.startsWith("openai/gpt-oss")) body.reasoning_effort = "low";
   const t0 = performance.now();
   try {
@@ -62,7 +91,7 @@ async function correct(text, tag) {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
     const data = await res.json();
     if (!res.ok) { log(`[${tag}] Groq 오류 ${res.status}: ${data.error?.message || ""}`); return; }
-    log(`[${tag}] → Groq 교정: ${data.choices[0].message.content.trim()}  (${Math.round(performance.now() - t0)}ms)`);
+    log(`[${tag}] → Groq ${label}: ${data.choices[0].message.content.trim()}  (${Math.round(performance.now() - t0)}ms)`);
   } catch (e) { log(`[${tag}] Groq 호출 실패: ${e.message}`); }
 }
 
@@ -116,6 +145,13 @@ document.getElementById("b6").onclick = () => {
   if (!text) return;
   log(`[직접] 입력: ${text}`);
   correct(text, "직접");
+};
+document.getElementById("b7").onclick = async () => {
+  const text = document.getElementById("manual").value.trim();
+  if (!text) return;
+  log(`[비교] 입력: ${text}`);
+  for (const model of ["openai/gpt-oss-20b", "openai/gpt-oss-120b"])
+    for (const strength of ["conservative", "aggressive"]) await correct(text, "비교", { model, strength });
 };
 document.getElementById("stop").onclick = () => { stop(); log("정지"); };
 </script>
