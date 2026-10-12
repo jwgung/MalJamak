@@ -16,19 +16,23 @@ DEFAULTS: dict = {
         "hotkey": "<ctrl>+<alt>+<space>",
         "mode": "toggle",  # toggle: 누를 때마다 시작/정지, hold: 누르고 있는 동안만
         "lang": "ko-KR",
+        "engine": "cloud",  # cloud: 구글 서버(정확), local: Chrome 기기 내 인식(오프라인, 덜 정확)
         "mic": "",  # Chrome deviceId, 빈 값이면 기본 마이크
         "separator": " ",
         "groq_correct": True,
+        "correction": "aggressive",  # aggressive: 발음이 비슷한 단어까지 문맥으로 교정, conservative: 띄어쓰기·명백한 오류만
         "paste_backend": "auto",
     },
     "captions": {
         "lang": "en-US",
+        "engine": "cloud",
         "source": "loopback",  # loopback: 기본 스피커 출력, 그 외: 입력 장치 이름 (BlackHole 등)
         "translator": "auto",  # auto: 내장 번역 → Groq, builtin, groq
         "font_size": 22,
         "opacity": 0.85,
     },
-    "groq": {"api_key": "", "model": "openai/gpt-oss-20b"},
+    "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
+    "glossary": [],  # 자주 쓰는 고유명사·용어. Groq 교정·번역에 넘긴다.
     "autostart": False,
 }
 

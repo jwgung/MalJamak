@@ -39,6 +39,7 @@ class Hub:
         self.listening = False
         self.captions_on = False
         self.builtin_translator = "unknown"
+        self.local_speech = "unknown"  # Chrome 기기 내 인식 API 지원 여부
         self.mics: list[dict] = []
 
         # 앱(트레이)이 연결하는 훅
@@ -65,6 +66,7 @@ class Hub:
             "listening": self.listening,
             "captions": self.captions_on,
             "builtin_translator": self.builtin_translator,
+            "local_speech": self.local_speech,
             "groq": bool(cfg["groq"]["api_key"]),
             "paste_backend": self.paster.backend,
             "last_error": self.last_error,
@@ -117,7 +119,8 @@ class Hub:
         self.listening = on
         if on:
             self._pasted_once = False
-            await self._send(self.engine, {"cmd": "input_start", "lang": cfg["lang"], "mic": cfg["mic"]})
+            await self._send(self.engine, {"cmd": "input_start", "lang": cfg["lang"], "mic": cfg["mic"],
+                                           "local": cfg["engine"] == "local"})
         else:
             self._accept_until = asyncio.get_running_loop().time() + 3
             await self._send(self.engine, {"cmd": "input_stop"})
@@ -133,9 +136,10 @@ class Hub:
         """교정에 시간이 걸려도 말한 순서대로 붙여넣는다."""
         while True:
             text = await self._finals.get()
-            cfg = self.config.get()["input"]
+            full = self.config.get()
+            cfg = full["input"]
             if self.groq and cfg["groq_correct"]:
-                text = await self.groq.correct(text) or text
+                text = await self.groq.correct(text, cfg["correction"], full["glossary"]) or text
             await self._paste_gate.wait()
             if self._pasted_once:
                 text = cfg["separator"] + text
@@ -164,6 +168,7 @@ class Hub:
             await self._send(self.engine, {
                 "cmd": "captions_start",
                 "lang": cfg["lang"],
+                "local": cfg["engine"] == "local",
                 "translator": translator,
                 "groq": self.groq is not None,
             })
@@ -190,7 +195,8 @@ class Hub:
     async def _translate(self, ws: web.WebSocketResponse, data: dict) -> None:
         if not self.groq:
             return
-        ko = await self.groq.translate(data.get("text", ""), data.get("source", ""), data.get("context") or [])
+        ko = await self.groq.translate(data.get("text", ""), data.get("source", ""), data.get("context") or [],
+                                       self.config.get()["glossary"])
         if ko:
             await self._send(ws, {"type": "translation", "id": data.get("id"), "ko": ko})
 
@@ -208,6 +214,17 @@ class Hub:
         return self.mics
 
     async def apply_settings(self, patch: dict) -> dict:
+        if "glossary" in patch:
+            raw = patch["glossary"]
+            items = raw.replace("\n", ",").split(",") if isinstance(raw, str) else raw
+            if not isinstance(items, list):
+                items = []
+            seen: dict[str, None] = {}
+            for item in items:
+                word = str(item).strip()[:60]
+                if word:
+                    seen.setdefault(word, None)
+            patch = {**patch, "glossary": list(seen)[:200]}
         cfg = self.config.update(patch)
         self._apply_groq(cfg)
         backend = cfg["input"]["paste_backend"]
@@ -293,6 +310,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                     hub._mics_waiter.set_result(data.get("mics", []))
             elif kind == "engine_info":
                 hub.builtin_translator = data.get("builtin_translator", "unknown")
+                hub.local_speech = data.get("local_speech", hub.local_speech)
                 await hub._changed()
             elif kind == "error":
                 print(f"[engine error] {data.get('where')}: {data.get('error')}", flush=True)

@@ -49,6 +49,7 @@
       <div class="pill"><b>내장 번역</b><span id="sBuiltin">…</span></div>
       <div class="pill"><b>Groq</b><span id="sGroq">…</span></div>
       <div class="pill"><b>붙여넣기</b><span id="sPaste">…</span></div>
+      <div class="pill"><b>오프라인 인식</b><span id="sLocal">…</span></div>
     </div>
     <div id="error" class="hint bad"></div>
     <div class="buttons">
@@ -70,10 +71,20 @@
         <select name="input.lang">
           <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option>
         </select></label>
+      <label class="row"><span>인식 방식</span>
+        <select name="input.engine">
+          <option value="cloud">온라인 — 구글 서버 (정확)</option>
+          <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
+        </select></label>
       <label class="row"><span>마이크</span><select name="input.mic"><option value="">기본 마이크</option></select></label>
       <label class="row"><span>문장 사이</span>
         <select name="input.separator"><option value=" ">공백 한 칸</option><option value="">붙여 쓰기</option></select></label>
       <label class="check"><input type="checkbox" name="input.groq_correct"> Groq 로 교정 (한영 혼용·띄어쓰기·군말)</label>
+      <label class="row"><span>교정 강도</span>
+        <select name="input.correction">
+          <option value="aggressive">적극적 — 발음이 비슷한 단어까지 문맥으로 고침</option>
+          <option value="conservative">보수적 — 띄어쓰기·명백한 오류만</option>
+        </select></label>
       <p class="hint">단축키 형식 예: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code>.
         전역 단축키를 못 쓰는 환경(Linux Wayland)은 OS 단축키에 <code>curl -s -X POST http://localhost:<span class="port"></span>/toggle</code> 를 등록하세요.</p>
     </section>
@@ -83,6 +94,11 @@
       <label class="row"><span>원어</span>
         <select name="captions.lang">
           <option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
+        </select></label>
+      <label class="row"><span>인식 방식</span>
+        <select name="captions.engine">
+          <option value="cloud">온라인 — 구글 서버 (정확)</option>
+          <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
         </select></label>
       <label class="row"><span>소리 출처</span><select name="captions.source"><option value="loopback">PC 소리 (기본 스피커 출력)</option></select></label>
       <label class="row"><span>번역 엔진</span>
@@ -98,12 +114,20 @@
     </section>
 
     <section>
+      <h2>단어장</h2>
+      <textarea name="glossary" rows="3" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:transparent; color:inherit; font:inherit"
+        placeholder="Groq, GitHub, 사람 이름, 회사 용어 …"></textarea>
+      <p class="hint">자주 쓰는 고유명사·용어를 쉼표나 줄바꿈으로 적으세요. Groq 교정·번역이 비슷하게 들린 말을 이 표기로 고칩니다
+        (예: "크로키는", "그룹" → Groq). Groq 키가 있을 때만 동작합니다.</p>
+    </section>
+
+    <section>
       <h2>Groq (선택)</h2>
       <label class="row"><span>API 키</span><input type="password" name="groq.api_key" autocomplete="off"></label>
       <label class="row"><span>모델</span>
         <select name="groq.model">
-          <option value="openai/gpt-oss-20b">GPT-OSS 20B (빠름)</option>
-          <option value="openai/gpt-oss-120b">GPT-OSS 120B (품질)</option>
+          <option value="openai/gpt-oss-120b">GPT-OSS 120B (추천)</option>
+          <option value="openai/gpt-oss-20b">GPT-OSS 20B (조금 더 빠름)</option>
         </select></label>
       <p class="hint" id="keyHint"></p>
       <div class="buttons"><button type="button" id="btnClearKey">키 삭제</button></div>
@@ -136,6 +160,7 @@ function fill(settings) {
   for (const el of fields) {
     const value = getPath(settings, el.name);
     if (el.name === "groq.api_key") { el.value = ""; continue; }
+    if (el.name === "glossary") { el.value = (value || []).join(", "); continue; }
     if (el.type === "checkbox") el.checked = !!value;
     else {
       if (el.tagName === "SELECT" && value != null) ensureOption(el, String(value), String(value));
@@ -160,6 +185,8 @@ function showStatus(s) {
   set("#sBuiltin", ...builtin);
   set("#sGroq", s.groq ? "키 있음" : "키 없음", s.groq ? "ok" : "");
   set("#sPaste", s.paste_backend === "dry-run" ? "사용 불가" : s.paste_backend, s.paste_backend === "dry-run" ? "bad" : "");
+  set("#sLocal", { supported: "지원", unsupported: "미지원 (Chrome 139+)", unknown: "확인 중…" }[s.local_speech] || s.local_speech,
+      s.local_speech === "supported" ? "ok" : s.local_speech === "unsupported" ? "bad" : "");
   $("#error").textContent = s.last_error || "";
   $("#btnInput").textContent = s.listening ? "음성 입력 정지" : "음성 입력 시작";
   $("#btnCaptions").textContent = s.captions ? "자막 끄기" : "자막 켜기";

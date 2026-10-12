@@ -21,19 +21,46 @@ function report(where, error) { send({ type: "error", where, error: String(error
 const MAX_ERRORS = 5;
 const BENIGN_ERRORS = new Set(["no-speech", "aborted"]);
 
+// 결과 없이 1초 안에 끝난 세션도 오류로 센다 (기기 내 인식이 곧바로 aborted 로 끝나며 쉬지 않고 도는 것을 막는다).
 function makeRestarter(isActive, startFn, onGiveUp) {
   let errors = 0;
+  let startedAt = 0;
+  let gotResult = false;
+  const begin = () => { startedAt = performance.now(); gotResult = false; startFn(); };
   return {
-    ok() { errors = 0; },
+    begin,
+    ok() { errors = 0; gotResult = true; },
     error(code) { if (!BENIGN_ERRORS.has(code)) errors++; },
     ended() {
       if (!isActive()) return;
+      if (!gotResult && performance.now() - startedAt < 1000) errors++;
       if (errors >= MAX_ERRORS) { onGiveUp(); return; }
       const delay = errors ? Math.min(500 * 2 ** (errors - 1), 8000) : 0;
-      setTimeout(() => { if (isActive()) { try { startFn(); } catch (_) { /* 이미 시작됨 */ } } }, delay);
+      setTimeout(() => { if (isActive()) { try { begin(); } catch (_) { /* 이미 시작됨 */ } } }, delay);
     },
   };
 }
+
+// 기기 내(오프라인) 인식 준비. Chrome 은 다시 켜면 설치 상태를 잊지만, 받아 둔 모델이 있으면 install() 이 곧바로 끝난다.
+async function ensureLocal(lang) {
+  if (typeof Recognition.available !== "function") throw new Error("이 Chrome 은 오프라인 인식을 지원하지 않습니다 (Chrome 139 이상 필요)");
+  const opts = { langs: [lang], processLocally: true };
+  const state = await Recognition.available(opts);
+  if (state === "unavailable") throw new Error(`${lang} 오프라인 인식을 지원하지 않습니다`);
+  if (state === "available") return;
+  let ok;
+  try { ok = await Recognition.install(opts); }
+  catch (err) {
+    // 일부 환경은 첫 다운로드에 사용자 클릭을 요구한다. 숨긴 엔진에서는 클릭할 수 없다.
+    if (err.name === "NotAllowedError" || /gesture/i.test(err.message)) {
+      throw new Error("이 PC 의 Chrome 은 오프라인 모델을 처음 받을 때 클릭이 필요해 자동 설치할 수 없습니다. 온라인 방식을 쓰세요.");
+    }
+    throw err;
+  }
+  if (!ok) throw new Error(`${lang} 오프라인 모델 설치에 실패했습니다`);
+}
+
+const LOCAL_GIVE_UP = "오프라인 인식이 계속 실패해 멈췄습니다. 설정에서 인식 방식을 온라인으로 바꿔 보세요.";
 
 function newRecognition(lang) {
   const r = new Recognition();
@@ -46,23 +73,31 @@ function newRecognition(lang) {
 // ───────────── 음성 입력 ─────────────
 
 let input = null;   // { rec, stream }
+let inputGen = 0;   // 모델 설치·마이크 열기를 기다리는 사이 정지/재시작되면 늦게 끝난 시작을 버린다
 
-async function startInput(lang, mic) {
+async function startInput(lang, mic, local) {
   stopInput();
+  const gen = inputGen;
+  if (local) {
+    try { await ensureLocal(lang); }
+    catch (err) { if (gen === inputGen) send({ type: "input_stopped", reason: err.message }); return; }
+  }
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: mic ? { deviceId: { exact: mic } } : true });
   } catch (err) {
-    send({ type: "input_stopped", reason: `마이크를 열 수 없습니다: ${err.message}` });
+    if (gen === inputGen) send({ type: "input_stopped", reason: `마이크를 열 수 없습니다: ${err.message}` });
     return;
   }
+  if (gen !== inputGen) { stream.getTracks().forEach((t) => t.stop()); return; }
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(lang);
+  if (local) r.processLocally = true;
   const state = { rec: r, stream };
   input = state;
   const restarter = makeRestarter(() => input === state, () => r.start(track), () => {
     stopInput();
-    send({ type: "input_stopped", reason: "음성 인식 오류가 반복되어 멈췄습니다." });
+    send({ type: "input_stopped", reason: local ? LOCAL_GIVE_UP : "음성 인식 오류가 반복되어 멈췄습니다." });
   });
   r.onresult = (e) => {
     restarter.ok();
@@ -72,10 +107,11 @@ async function startInput(lang, mic) {
   };
   r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("input", e.error); };
   r.onend = () => restarter.ended();
-  r.start(track);
+  restarter.begin();
 }
 
 function stopInput() {
+  inputGen++;
   const s = input;
   if (!s) return;
   input = null;
@@ -93,6 +129,7 @@ const SENTENCE_END = /[.!?。！？]$/;
 const SAMPLE_RATE = 16000;
 
 let cap = null;
+let capGen = 0;
 let lineSeq = 0;
 let builtinState = "unknown";
 
@@ -148,8 +185,13 @@ function applyGroqTranslation(id, ko) {
   publish(cap);
 }
 
-async function startCaptions(lang, translator, groqAvailable) {
+async function startCaptions(lang, translator, groqAvailable, local) {
   stopCaptions();
+  const gen = capGen;
+  if (local) {
+    try { await ensureLocal(lang); }
+    catch (err) { if (gen === capGen) send({ type: "captions_stopped", reason: err.message }); return; }
+  }
   const source = lang.split("-")[0];
   let builtin = null;
   if (translator === "auto" || translator === "builtin") {
@@ -157,18 +199,20 @@ async function startCaptions(lang, translator, groqAvailable) {
     catch (err) { report("translator", err.message); }
   }
   const useGroq = groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
+  if (gen !== capGen) { builtin?.destroy?.(); return; }
 
   // 서버가 보내는 PCM 을 오디오 트랙으로 만든다.
   const generator = new MediaStreamTrackGenerator({ kind: "audio" });
   const writer = generator.writable.getWriter();
   const r = newRecognition(lang);
+  if (local) r.processLocally = true;
   const c = { rec: r, generator, writer, builtin, useGroq, lang, lines: [], live: null,
               buffer: "", flushTimer: null, timestamp: 0, liveSeq: 0 };
   cap = c;
 
   const restarter = makeRestarter(() => cap === c, () => r.start(generator), () => {
     stopCaptions();
-    send({ type: "captions_stopped", reason: "자막 인식 오류가 반복되어 멈췄습니다." });
+    send({ type: "captions_stopped", reason: local ? LOCAL_GIVE_UP : "자막 인식 오류가 반복되어 멈췄습니다." });
   });
   r.onresult = async (e) => {
     restarter.ok();
@@ -185,7 +229,7 @@ async function startCaptions(lang, translator, groqAvailable) {
   };
   r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("captions", e.error); };
   r.onend = () => restarter.ended();
-  r.start(generator);
+  restarter.begin();
   publish(c);
 }
 
@@ -200,6 +244,7 @@ function pushAudio(buf) {
 }
 
 function stopCaptions() {
+  capGen++;
   const c = cap;
   if (!c) return;
   cap = null;
@@ -233,21 +278,25 @@ async function probeBuiltinTranslator() {
     try { builtinState = await Translator.availability({ sourceLanguage: "en", targetLanguage: "ko" }); }
     catch (err) { builtinState = `error: ${err.message}`; }
   }
-  send({ type: "engine_info", builtin_translator: builtinState });
+  send({ type: "engine_info", builtin_translator: builtinState, local_speech: localSpeechState() });
+}
+
+function localSpeechState() {
+  return Recognition && typeof Recognition.available === "function" ? "supported" : "unsupported";
 }
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws?role=engine`);
   ws.binaryType = "arraybuffer";
-  ws.onopen = () => send({ type: "engine_info", builtin_translator: builtinState });
+  ws.onopen = () => send({ type: "engine_info", builtin_translator: builtinState, local_speech: localSpeechState() });
   ws.onclose = () => { stopInput(); stopCaptions(); setTimeout(connect, 1000); };
   ws.onmessage = async (e) => {
     if (e.data instanceof ArrayBuffer) { pushAudio(e.data); return; }
     const msg = JSON.parse(e.data);
     switch (msg.cmd || msg.type) {
-      case "input_start": startInput(msg.lang, msg.mic); break;
+      case "input_start": startInput(msg.lang, msg.mic, msg.local); break;
       case "input_stop": stopInput(); break;
-      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq); break;
+      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local); break;
       case "captions_stop": stopCaptions(); break;
       case "list_mics": send({ type: "mics", mics: await listMics() }); break;
       case "translation": applyGroqTranslation(msg.id, msg.ko); break;
