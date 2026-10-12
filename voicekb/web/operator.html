@@ -76,12 +76,14 @@
     <label>언어<select id="lang"><option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
     <label>인식 방식<select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option></select></label>
     <label>통화용 보정 (잡음 제거·자동 음량)<select id="processing"><option value="false">끄기 — 믹서 직결</option><option value="true">켜기 — 공간 마이크</option></select></label>
-    <label>조각 간격 (초)<input id="chunk" type="number" min="1" max="10" step="0.5"></label>
+    <label>쉼 감지 (초) — 말이 이만큼 멈추면 자름<input id="pause" type="number" min="0.3" max="3" step="0.1"></label>
+    <label>최대 대기 (초) — 자를 곳이 없어도 이만큼 지나면 자름<input id="maxwait" type="number" min="1" max="15" step="0.5"></label>
     <label>안정 판정 (초)<input id="stable" type="number" min="0.3" max="3" step="0.1"></label>
     <label>자막 글자 크기 (px)<input id="font" type="number" min="20" max="160" step="2"></label>
     <label>자막 줄 수<input id="lines" type="number" min="1" max="8"></label>
   </div>
-  <p class="pill">소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</p>
+  <p class="pill">조각은 문장 끝 → 말 멈춤 → "~다, ~요, ~고, ~는데" 같은 어미 순으로 자연스러운 곳에서 자릅니다.
+    소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</p>
 </details>
 <main id="list"></main>
 <div id="preview"></div>
@@ -239,7 +241,7 @@ async function loadSettings() {
   const { settings } = await (await fetch("/api/settings")).json();
   const l = settings.live;
   $("lang").value = l.lang; $("engine").value = l.engine; $("processing").value = String(l.voice_processing);
-  $("chunk").value = l.chunk_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines;
+  $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines;
   try {
     const { mics } = await (await fetch("/api/sources")).json();
     mics.filter((m) => m.id !== "default" && m.id !== "communications")
@@ -259,7 +261,8 @@ $("mic").onchange = () => save({ mic: $("mic").value });
 $("lang").onchange = () => save({ lang: $("lang").value });
 $("engine").onchange = () => save({ engine: $("engine").value });
 $("processing").onchange = () => save({ voice_processing: $("processing").value === "true" });
-$("chunk").onchange = () => save({ chunk_seconds: Number($("chunk").value) });
+$("pause").onchange = () => save({ pause_seconds: Number($("pause").value) });
+$("maxwait").onchange = () => save({ max_wait_seconds: Number($("maxwait").value) });
 $("stable").onchange = () => save({ stable_seconds: Number($("stable").value) });
 $("font").onchange = () => save({ font_size: Number($("font").value) });
 $("lines").onchange = () => save({ lines: Number($("lines").value) });

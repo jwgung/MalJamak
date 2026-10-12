@@ -257,10 +257,14 @@ function stopCaptions() {
 }
 
 // ───────────── 현장 자막: 마이크 → 조각(초안) ─────────────
-// 문장 끝을 기다리면 늦으므로, 일정 시간 바뀌지 않은 앞부분 단어를 주기적으로 잘라 조작자에게 보낸다.
+// 문장 끝을 기다리면 늦고, 일정 간격으로 자르면 말 중간에서 끊긴다("올라갈 / 때").
+// 그래서 자연스러운 지점에서 자른다: 문장 확정 → 말이 잠깐 멈춤 → 의미 단위가 끝나는 어미 → 그래도 오래 쌓이면 강제.
 // Chrome 은 중간 결과를 계속 고치므로(예: "로마서 활성화" → "로마서 8장") 아직 흔들리는 끝부분은 남겨 둔다.
 
 const MIN_CHUNK_WORDS = 3;
+const MIN_GAP_MS = 1000;  // 어미 기준으로 너무 잘게 쪼개지지 않게
+// 의미 단위가 끝나는 어미·문장부호. 이 단어 뒤에서 자르면 자연스럽다.
+const BOUNDARY = /(니다|어요|아요|에요|예요|세요|해요|죠|다|요|까|고|며|서|는데|은데|인데|지만|니까|면|거든|[.,!?。！？])$/;
 let live = null;
 let liveGen = 0;
 
@@ -291,22 +295,34 @@ function onLiveResult(L, e) {
   const now = performance.now();
   let d = 0;
   while (d < words.length && d < L.words.length && words[d] === L.words[d]) d++;
+  const changed = d < words.length || words.length !== L.words.length;
   L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
   L.words = words;
   L.finalCount = finals.length;
   if (L.emitted > words.length) L.emitted = words.length;  // Chrome 이 앞부분을 줄여 고친 경우
+  if (changed) L.lastChange = now;
   evaluateLive(L);
+}
+
+// stable 까지의 단어 중, 최소 길이를 넘는 마지막 어미 지점을 찾는다. 없으면 -1.
+function lastBoundary(L, stable) {
+  for (let j = stable; j >= L.emitted + MIN_CHUNK_WORDS; j--) if (BOUNDARY.test(L.words[j - 1])) return j;
+  return -1;
 }
 
 function evaluateLive(L) {
   const now = performance.now();
   let stable = L.emitted;
   while (stable < L.words.length && (stable < L.finalCount || now - L.since[stable] >= L.stableMs)) stable++;
-  const available = stable - L.emitted;
-  const sinceEmit = now - L.lastEmit;
-  if (available > 0 && stable >= L.finalCount && L.finalCount === L.words.length) emitLive(L, stable);  // 문장 확정
-  else if (available >= MIN_CHUNK_WORDS && sinceEmit >= L.chunkMs) emitLive(L, stable);
-  else if (available > 0 && sinceEmit >= L.chunkMs * 2) emitLive(L, stable);  // 말이 느려도 너무 오래 쌓아 두지 않는다
+  const pending = L.words.length - L.emitted;
+  if (pending > 0) {
+    const sinceEmit = now - L.lastEmit;
+    const cut = lastBoundary(L, stable);
+    if (L.finalCount === L.words.length && stable === L.words.length) emitLive(L, stable);  // 1. 문장 확정
+    else if (now - L.lastChange >= L.pauseMs) emitLive(L, L.words.length);  // 2. 말이 멈춤: 바뀌는 게 없으니 전부
+    else if (cut > 0 && sinceEmit >= MIN_GAP_MS) emitLive(L, cut);  // 3. 의미 단위가 끝나는 어미
+    else if (sinceEmit >= L.maxMs && stable > L.emitted) emitLive(L, cut > 0 ? cut : stable);  // 4. 너무 오래 쌓임
+  }
   sendLivePreview(L);
 }
 
@@ -330,7 +346,8 @@ async function startLive(msg) {
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
-  const L = { rec: r, stream, chunkMs: msg.chunk_ms || 2000, stableMs: msg.stable_ms || 800, lastEmit: performance.now() };
+  const L = { rec: r, stream, maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
+              lastEmit: performance.now(), lastChange: performance.now() };
   resetLiveSession(L);
   live = L;
   const restarter = makeRestarter(() => live === L, () => r.start(track), () => {

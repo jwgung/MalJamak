@@ -221,7 +221,8 @@ class Hub:
             await self._send(self.engine, {
                 "cmd": "live_start", "lang": cfg["lang"], "mic": cfg["mic"], "local": cfg["engine"] == "local",
                 "processing": cfg["voice_processing"],
-                "chunk_ms": int(cfg["chunk_seconds"] * 1000), "stable_ms": int(cfg["stable_seconds"] * 1000),
+                "pause_ms": int(cfg["pause_seconds"] * 1000), "max_ms": int(cfg["max_wait_seconds"] * 1000),
+                "stable_ms": int(cfg["stable_seconds"] * 1000),
             })
         else:
             self.live_on = False

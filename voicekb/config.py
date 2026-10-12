@@ -38,7 +38,9 @@ DEFAULTS: dict = {
         "voice_processing": False,  # 잡음 제거·자동 음량. 믹서 직결이면 끄는 게 낫다
         "review": "auto",  # auto: 카운트다운 후 자동 내보내기, manual: 조작자가 내보내야 나감
         "countdown": 3.0,
-        "chunk_seconds": 2.0,  # 이 간격마다 안정된 말을 조각으로 자른다
+        # 조각은 자연스러운 지점(문장 끝·말 멈춤·어미)에서 자른다. 이 값들은 그 판단 기준이다.
+        "pause_seconds": 0.7,  # 이 시간 동안 새 말이 없으면 멈춘 것으로 보고 자른다
+        "max_wait_seconds": 4.0,  # 자를 지점이 없어도 이 시간이 지나면 자른다
         "stable_seconds": 0.8,  # 이 시간 동안 바뀌지 않은 단어만 안정된 것으로 본다
         "font_size": 56,
         "lines": 3,
