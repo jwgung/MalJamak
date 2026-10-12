@@ -47,6 +47,13 @@
   .item .bar { width: 60px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex-shrink: 0; }
   .item .bar i { display: block; height: 100%; background: var(--warn); }
   .item button { padding: 4px 10px; font-size: 13px; }
+  #testbar { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--card);
+             display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  #testbar input[type=text] { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+             background: transparent; color: inherit; font: inherit; }
+  #testUrl { flex: 1; min-width: 220px; }
+  #testOffset { width: 72px; }
+  #testState.ready { color: var(--ok); } #testState.error { color: var(--bad); }
   #preview { padding: 10px 16px; border-top: 1px solid var(--border); background: var(--card); color: var(--muted);
              font-style: italic; min-height: 44px; }
   footer { padding: 6px 16px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
@@ -69,6 +76,16 @@
   <button id="btnDisplay">자막 화면 열기</button>
 </header>
 <div id="error"></div>
+<div id="testbar">
+  <b>테스트 소리</b>
+  <input id="testUrl" type="text" placeholder="유튜브 링크 (마이크 대신 이 영상 소리로 자막 시험)">
+  <label>시작 위치 <input id="testOffset" type="text" placeholder="0:00"></label>
+  <button id="btnTestLoad">불러오기</button>
+  <label><input id="useTest" type="checkbox"> 이 소리로 자막 시작</label>
+  <label><input id="testMute" type="checkbox"> 내 쪽 소리 끄기</label>
+  <span id="testState" class="pill"></span>
+  <audio id="testPlayer" preload="auto"></audio>
+</div>
 <details>
   <summary>소리·화면 설정</summary>
   <div class="grid">
@@ -102,10 +119,16 @@ let focusedId = null;
 let stickToBottom = true;
 const rows = new Map();  // id → { el, input, bar, meta }
 
-function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+// 연결 전·재연결 중에 누른 명령은 버리지 않고 연결되면 보낸다.
+const outbox = [];
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  else outbox.push(obj);
+}
 
 function connect() {
   ws = new WebSocket(`ws://${location.host}/ws?role=operator`);
+  ws.onopen = () => { while (outbox.length) ws.send(JSON.stringify(outbox.shift())); };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type !== "queue") return;
@@ -114,6 +137,35 @@ function connect() {
     render();
   };
   ws.onclose = () => { $("state").textContent = "연결 끊김, 재연결 중…"; setTimeout(connect, 1000); };
+}
+
+function fmtTime(sec) {
+  sec = Math.round(sec || 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? `${h}:${String(m).padStart(2, "0")}` : `${m}`) + `:${String(s).padStart(2, "0")}`;
+}
+
+// "5:00", "1:02:30", "300" → 초
+function parseOffset(text) {
+  const parts = String(text || "").trim().split(":").map(Number);
+  if (!parts.length || parts.some(Number.isNaN)) return 0;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+function renderTest() {
+  const t = status.test || { status: "idle" };
+  const el = $("testState");
+  el.className = `pill ${t.status}`;
+  el.textContent = { idle: "", downloading: `받는 중… ${t.progress || 0}%`,
+                     ready: `준비됨: ${t.title || ""} (${fmtTime(t.duration)})`, error: `실패: ${t.error || ""}` }[t.status] || "";
+  $("btnTestLoad").disabled = t.status === "downloading";
+  const player = $("testPlayer");
+  if (status.test_audio && player.dataset.src !== status.test_audio) {
+    player.dataset.src = status.test_audio;
+    player.src = status.test_audio;
+    $("useTest").checked = true;
+  }
+  if (!status.live && !player.paused) player.pause();
 }
 
 function renderHeader() {
@@ -125,6 +177,7 @@ function renderHeader() {
   if (document.activeElement !== $("countdown")) $("countdown").value = status.countdown;
   $("error").textContent = status.last_error || "";
   $("file").textContent = status.transcript ? `기록: ${status.transcript}` : "";
+  renderTest();
 }
 
 function makeRow(item) {
@@ -267,7 +320,20 @@ $("stable").onchange = () => save({ stable_seconds: Number($("stable").value) })
 $("font").onchange = () => save({ font_size: Number($("font").value) });
 $("lines").onchange = () => save({ lines: Number($("lines").value) });
 
-$("btnLive").onclick = () => send({ cmd: status.live ? "stop" : "start" });
+$("btnLive").onclick = () => {
+  const player = $("testPlayer");
+  if (status.live) { send({ cmd: "stop" }); player.pause(); return; }
+  const test = $("useTest").checked && status.test?.status === "ready";
+  const offset = parseOffset($("testOffset").value);
+  send({ cmd: "start", test, offset });
+  // 조작자도 같은 소리를 들으며 교정한다. 엔진도 같은 위치에서 재생을 시작한다(1초 안팎 차이).
+  if (test) { player.currentTime = offset; player.muted = $("testMute").checked; player.play().catch(() => {}); }
+};
+$("btnTestLoad").onclick = () => {
+  const url = $("testUrl").value.trim();
+  if (url) send({ cmd: "test_load", url });
+};
+$("testMute").onchange = () => { $("testPlayer").muted = $("testMute").checked; };
 $("btnAll").onclick = sendAll;
 $("btnDisplay").onclick = () => fetch("/live/display-window", { method: "POST" });
 document.addEventListener("keydown", (e) => {

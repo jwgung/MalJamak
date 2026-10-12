@@ -268,20 +268,39 @@ const BOUNDARY = /(니다|어요|아요|에요|예요|세요|해요|죠|다|요|
 let live = null;
 let liveGen = 0;
 
+// 어디까지 내보냈는지는 단어 개수가 아니라 글자 수(공백 제외)로 기억한다.
+// Chrome 은 확정할 때 단어를 합치거나 나눈다("올려 주세요" → "올려주세요"). 단어 개수로 세면 "주세요"가 두 번 나간다.
 function resetLiveSession(L) {
   L.words = []; L.since = []; L.finalCount = 0; L.emitted = 0; L.preview = "";
+  L.emittedChars = 0; L.partial = 0;  // partial: words[emitted] 중 이미 내보낸 앞 글자 수
+}
+
+function realignLive(L) {
+  let acc = 0, k = 0;
+  while (k < L.words.length && acc + L.words[k].length <= L.emittedChars) acc += L.words[k++].length;
+  L.emitted = k;
+  L.partial = k < L.words.length ? L.emittedChars - acc : 0;
+}
+
+function pendingWords(L, upto) {
+  const parts = L.words.slice(L.emitted, upto);
+  if (L.partial && parts.length) parts[0] = parts[0].slice(L.partial);
+  return parts.filter(Boolean);
 }
 
 function emitLive(L, upto) {
   if (upto <= L.emitted) return;
-  const text = L.words.slice(L.emitted, upto).join(" ");
+  const parts = pendingWords(L, upto);
   L.emitted = upto;
+  L.partial = 0;
+  L.emittedChars += parts.join("").length;
+  if (!parts.length) return;
   L.lastEmit = performance.now();
-  send({ type: "draft", text });
+  send({ type: "draft", text: parts.join(" ") });
 }
 
 function sendLivePreview(L) {
-  const preview = L.words.slice(L.emitted).join(" ");
+  const preview = pendingWords(L, L.words.length).join(" ");
   if (preview !== L.preview) { L.preview = preview; send({ type: "live_preview", text: preview }); }
 }
 
@@ -299,7 +318,7 @@ function onLiveResult(L, e) {
   L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
   L.words = words;
   L.finalCount = finals.length;
-  if (L.emitted > words.length) L.emitted = words.length;  // Chrome 이 앞부분을 줄여 고친 경우
+  realignLive(L);
   if (changed) L.lastChange = now;
   evaluateLive(L);
 }
@@ -333,20 +352,25 @@ async function startLive(msg) {
     try { await ensureLocal(msg.lang); }
     catch (err) { if (gen === liveGen) send({ type: "live_stopped", reason: err.message }); return; }
   }
-  // 믹서 직결 소리에는 통화용 보정(잡음 제거·자동 음량)이 오히려 방해가 된다.
-  const audio = { echoCancellation: msg.processing, noiseSuppression: msg.processing, autoGainControl: msg.processing };
-  if (msg.mic) audio.deviceId = { exact: msg.mic };
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio }); }
-  catch (err) {
-    if (gen === liveGen) send({ type: "live_stopped", reason: `마이크를 열 수 없습니다: ${err.message}` });
+  let stream, testAudio = null;
+  try {
+    if (msg.test_audio) [stream, testAudio] = await openTestAudio(msg.test_audio, msg.offset || 0);
+    else {
+      // 믹서 직결 소리에는 통화용 보정(잡음 제거·자동 음량)이 오히려 방해가 된다.
+      const audio = { echoCancellation: msg.processing, noiseSuppression: msg.processing, autoGainControl: msg.processing };
+      if (msg.mic) audio.deviceId = { exact: msg.mic };
+      stream = await navigator.mediaDevices.getUserMedia({ audio });
+    }
+  } catch (err) {
+    if (gen === liveGen) send({ type: "live_stopped", reason: msg.test_audio ? `테스트 소리를 재생할 수 없습니다: ${err.message}`
+                                                                            : `마이크를 열 수 없습니다: ${err.message}` });
     return;
   }
-  if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); return; }
+  if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); testAudio?.pause(); return; }
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
-  const L = { rec: r, stream, maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
+  const L = { rec: r, stream, testAudio, maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
               lastEmit: performance.now(), lastChange: performance.now() };
   resetLiveSession(L);
   live = L;
@@ -359,7 +383,30 @@ async function startLive(msg) {
   // 세션이 끊기면(침묵·네트워크 오류) 아직 확정 안 된 말까지 조각으로 넘겨 유실을 막는다.
   r.onend = () => { emitLive(L, L.words.length); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
   L.timer = setInterval(() => evaluateLive(L), 200);
+  if (testAudio) testAudio.onended = () => {
+    if (live !== L) return;
+    emitLive(L, L.words.length);
+    stopLive();
+    send({ type: "live_stopped", reason: "테스트 소리가 끝났습니다." });
+  };
   restarter.begin();
+}
+
+// 테스트 소리: 서버가 받아 둔 영상 소리를 재생하고 그 소리를 오디오 트랙으로 뽑는다.
+async function openTestAudio(url, offset) {
+  const el = new Audio(url);
+  el.preload = "auto";
+  await new Promise((resolve, reject) => {
+    el.onloadedmetadata = resolve;
+    el.onerror = () => reject(new Error(el.error?.message || "파일을 열 수 없음"));
+  });
+  el.currentTime = offset;
+  await el.play();
+  const stream = el.captureStream();
+  if (!stream.getAudioTracks().length) {
+    await new Promise((resolve) => stream.addEventListener("addtrack", resolve, { once: true }));
+  }
+  return [stream, el];
 }
 
 function stopLive() {
@@ -371,6 +418,7 @@ function stopLive() {
   L.rec.onend = null;
   try { L.rec.stop(); } catch (_) {}
   L.stream.getTracks().forEach((t) => t.stop());
+  if (L.testAudio) { L.testAudio.onended = null; L.testAudio.pause(); L.testAudio.removeAttribute("src"); L.testAudio.load(); }
 }
 
 // ───────────── 서버 연결 ─────────────

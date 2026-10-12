@@ -52,6 +52,7 @@ class ChromeEngine:
             "--no-first-run",
             "--no-default-browser-check",
             "--use-fake-ui-for-media-stream",  # 권한 창을 띄울 수 없으므로 마이크 권한 자동 허용
+            "--autoplay-policy=no-user-gesture-required",  # 테스트 소리(유튜브)를 클릭 없이 재생
             "--disable-features=Translate",
         ]
         # 테스트용 추가 인자 (가짜 마이크 등)

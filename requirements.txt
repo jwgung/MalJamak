@@ -7,3 +7,4 @@ numpy>=1.24
 psutil>=5.9
 # Linux 는 xdotool/wtype/ydotool 로 붙여넣는다. X11 전역 단축키가 필요할 때만 pynput 을 따로 설치.
 pynput>=1.7; sys_platform != "linux"
+yt-dlp>=2025.1

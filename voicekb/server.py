@@ -16,6 +16,7 @@ from aiohttp import WSMsgType, web
 from .config import Config, config_dir, resource_dir
 from .groq import Groq
 from .live import LiveSession
+from .testsource import TestSource
 from .paste import Paster
 
 
@@ -42,6 +43,8 @@ class Hub:
         self.live = LiveSession(config_dir() / "transcripts")
         self.live_on = False
         self.live_preview = ""
+        self.live_test = False  # 이번 현장 자막이 테스트 소리(유튜브)로 도는지
+        self.test = TestSource(config_dir() / "test-audio", self._test_changed)
 
         self.listening = False
         self.captions_on = False
@@ -203,8 +206,17 @@ class Hub:
 
     # ───────── 현장 자막 ─────────
 
-    async def set_live(self, on: bool) -> None:
+    def _test_changed(self) -> None:
+        """다운로드 스레드에서 불린다."""
+        if self.loop:
+            asyncio.run_coroutine_threadsafe(self.broadcast_live(display=False), self.loop)
+
+    async def set_live(self, on: bool, test: bool = False, offset: float = 0.0) -> None:
         if on == self.live_on:
+            return
+        if on and test and self.test.path is None:
+            self.last_error = "테스트 소리를 먼저 불러오세요."
+            await self.broadcast_live(display=False)
             return
         if on:
             if self.engine is None:
@@ -217,15 +229,19 @@ class Hub:
             cfg = self.config.get()["live"]
             self.live.start()
             self.live_on = True
+            self.live_test = test
             self.live_preview = ""
             await self._send(self.engine, {
                 "cmd": "live_start", "lang": cfg["lang"], "mic": cfg["mic"], "local": cfg["engine"] == "local",
+                "test_audio": f"/live/test-audio?f={self.test.path.name}" if test else None,
+                "offset": max(0.0, float(offset)),
                 "processing": cfg["voice_processing"],
                 "pause_ms": int(cfg["pause_seconds"] * 1000), "max_ms": int(cfg["max_wait_seconds"] * 1000),
                 "stable_ms": int(cfg["stable_seconds"] * 1000),
             })
         else:
             self.live_on = False
+            self.live_test = False
             self.live_preview = ""
             await self._send(self.engine, {"cmd": "live_stop"})
         await self._changed()
@@ -236,7 +252,9 @@ class Hub:
 
     def _live_status(self) -> dict:
         cfg = self.config.get()["live"]
-        return {"live": self.live_on, "engine": self.engine is not None, "review": cfg["review"],
+        return {"live": self.live_on, "live_test": self.live_test, "test": self.test.view(),
+                "test_audio": f"/live/test-audio?f={self.test.path.name}" if self.test.path else None,
+                "engine": self.engine is not None, "review": cfg["review"],
                 "countdown": cfg["countdown"], "transcript": str(self.live.transcript_path()) if self.live.started else "",
                 "last_error": self.last_error}
 
@@ -279,7 +297,13 @@ class Hub:
         elif cmd == "send_all":
             changed_display = self.live.send_all_pending() > 0
         elif cmd == "start":
-            await self.set_live(True)
+            await self.set_live(True, bool(data.get("test")), data.get("offset") or 0)
+            return
+        elif cmd == "test_load":
+            self.test.load(str(data.get("url", "")))
+            return
+        elif cmd == "test_clear":
+            self.test.clear()
             return
         elif cmd == "stop":
             await self.set_live(False)
@@ -512,6 +536,14 @@ async def sources_get(request: web.Request) -> web.Response:
     })
 
 
+async def test_audio(request: web.Request) -> web.StreamResponse:
+    """불러온 테스트 소리 파일. 엔진(숨긴 Chrome)과 교정 화면이 재생한다. 구간 이동(Range)을 지원한다."""
+    hub: Hub = request.app["hub"]
+    if hub.test.path is None or not hub.test.path.exists():
+        raise web.HTTPNotFound()
+    return web.FileResponse(hub.test.path)
+
+
 async def _open_display(request: web.Request) -> web.Response:
     """자막 화면을 보이는 Chrome 앱 창으로 띄운다. 프로젝터 모니터로 옮겨 F11 로 전체 화면."""
     await asyncio.to_thread(request.app["open_display"])
@@ -533,6 +565,7 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
     app.router.add_get("/operator", lambda r: web.FileResponse(web_dir / "operator.html"))
     app.router.add_get("/display", lambda r: web.FileResponse(web_dir / "display.html"))
     app.router.add_post("/live/toggle", toggle_handler)
+    app.router.add_get("/live/test-audio", test_audio)
     app.router.add_post("/live/display-window", lambda r: _open_display(r))
     app.router.add_get("/ws", ws_handler)
     app.router.add_post("/toggle", toggle_handler)
