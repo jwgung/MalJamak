@@ -55,6 +55,51 @@ class OperatorLineBreakTest(unittest.TestCase):
         self.assertEqual(self.live.items[0].text, "쉽지가 않아요")
 
 
+class FillGapsTest(unittest.TestCase):
+    """빠진 통역 채우기: 조작자 직접 입력과 강사 원어의 기계 번역 제안."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.live = LiveSession(Path(self.tmp.name))
+        self.live.start()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def texts(self):
+        return [c.text for c in self.live.items]
+
+    def test_manual_insert_after_chunk_and_sent(self):
+        a, _ = self.live.add_draft("하나", "auto", 3)
+        b, _ = self.live.add_draft("셋", "auto", 3)
+        m = self.live.add_manual("둘", after_id=a.id)
+        self.assertEqual(self.texts(), ["하나", "둘", "셋"])
+        self.assertEqual((m.status, m.kind), ("sent", "manual"))
+
+    def test_manual_insert_at_end(self):
+        self.live.add_draft("하나", "manual", 3)
+        self.live.add_manual("끝")
+        self.assertEqual(self.texts(), ["하나", "끝"])
+
+    def test_suggestion_inserted_after_chunk_and_never_auto_sent(self):
+        a, _ = self.live.add_draft("앞 조각", "auto", 0)
+        self.live.add_draft("뒤 조각", "auto", 0)
+        s = self.live.add_suggestion("빠진 통역 제안", "missing interpretation", after_id=a.id)
+        self.assertEqual(self.texts(), ["앞 조각", "빠진 통역 제안", "뒤 조각"])
+        self.assertIsNone(s.deadline)
+        self.assertNotIn(s, self.live.due())
+        self.live.send_all_pending()
+        self.assertEqual(s.status, "pending")  # 모두 내보내기에서도 빠진다
+        self.live.set_review("auto", 0)
+        self.assertIsNone(s.deadline)  # 검토 방식을 바꿔도 자동으로 나가지 않는다
+
+    def test_empty_suggestion_needs_operator_text(self):
+        s = self.live.add_suggestion("", "untranslated source")
+        self.assertFalse(self.live.send(s.id))
+        self.assertTrue(self.live.send(s.id, "조작자가 쓴 통역"))
+        self.assertEqual(s.text, "조작자가 쓴 통역")
+
+
 class AutoSentenceBreakTest(unittest.TestCase):
     """자동 줄바꿈(실험): 다음 조각이 왔을 때 앞뒤 문맥으로 문장 경계를 추측한다."""
 

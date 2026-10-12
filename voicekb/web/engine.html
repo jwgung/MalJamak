@@ -526,7 +526,6 @@ async function startInterpret(msg, stream, testAudio) {
   const buf = new Float32Array(analyser.fftSize);
   const I = { ctx, stream, testAudio, merger: new InterpretMerger(), sessions: new Set(), timers: [], otherAt: 0, stopped: false };
   interp = I;
-
   const session = (lang, continuous, onText, lifeMs) => {
     if (I.stopped) return null;
     debug("open", lang, continuous ? "연속" : "단발", "열린 세션", I.sessions.size + 1);
@@ -535,7 +534,7 @@ async function startInterpret(msg, stream, testAudio) {
     r.interimResults = false;
     const tr = delayed.clone();
     I.sessions.add(r);
-    r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) onText(e.results[i][0].transcript.trim()); };
+    r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) onText(e.results[i][0].transcript.trim(), e.results[i][0].confidence); };
     r.onerror = (e) => { if (!BENIGN_ERRORS.has(e.error)) report("interpret", e.error); };
     r.onend = () => { tr.stop(); I.sessions.delete(r); };
     try { r.start(tr); } catch (err) { report("interpret", err.message); }
@@ -551,8 +550,12 @@ async function startInterpret(msg, stream, testAudio) {
     const added = I.merger.add(text);
     if (added.length) send({ type: "draft", text: added.join(" "), reason: "final" });
   };
-  const onOther = (text) => {
+  const onOther = (text, confidence = 1) => {
     if (I.stopped || !text) return;
+    debug("other", confidence.toFixed(2), text.slice(0, 40));
+    // 원어 인식기는 한국어 구간에서도 엉뚱한 영어를 낸다. 신뢰도가 낮은 것은 참고 줄에서 뺀다
+    // (실측: 실제 영어 0.93~0.97, 엉터리 0.71~0.89 — 높은 엉터리도 있어 완전히 거를 수는 없다)
+    if (confidence < 0.8) return;
     I.otherAt = performance.now();
     send({ type: "live_other", text });
   };

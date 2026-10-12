@@ -46,6 +46,7 @@ class Hub:
         self.live_preview = ""
         self.live_test = False  # 이번 현장 자막이 테스트 소리(유튜브)로 도는지
         self.live_other: list[str] = []  # 순차통역 모드: 강사 원어 인식 결과 (교정 화면 참고용)
+        self._bg: set[asyncio.Task] = set()  # 번역 제안처럼 화면을 막지 않고 도는 작업 (참조를 잡아 둬야 사라지지 않는다)
         self.test = TestSource(config_dir() / "test-audio", self._test_changed)
 
         self.listening = False
@@ -301,6 +302,15 @@ class Hub:
             changed_display = self.live.send(chunk_id, data.get("text"))
             if data.get("break_after"):
                 self.live.toggle_break(chunk_id, True)
+        elif cmd == "suggest":
+            # 번역은 시간이 걸리므로 조작자 화면을 막지 않게 따로 돌린다
+            task = asyncio.create_task(self.suggest_from_source(str(data.get("source", "")), data.get("after")))
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
+            return
+        elif cmd == "insert":
+            # 조작자 직접 입력: after 조각 뒤(없으면 맨 끝)에 넣고 바로 내보낸다
+            changed_display = self.live.add_manual(str(data.get("text", "")), data.get("after"), True) is not None
         elif cmd == "toggle_break":
             chunk = self.live.find(chunk_id)
             changed_display = self.live.toggle_break(chunk_id) and chunk.status == "sent"
@@ -328,6 +338,19 @@ class Hub:
             await self.set_live(False)
             return
         await self.broadcast_live(display=changed_display)
+
+    async def suggest_from_source(self, source: str, after_id: int | None) -> None:
+        """조작자가 고른 강사 원어 문장을 번역해 제안 조각으로 넣는다 (빠진 통역 채우기).
+        Groq 키가 없으면 빈 제안을 넣어 조작자가 원어를 보고 직접 쓰게 한다."""
+        source = source.strip()
+        if not source:
+            return
+        ko = ""
+        if self.groq:
+            cfg = self.config.get()
+            ko = await self.groq.translate(source, cfg["live"]["other_lang"], [], cfg["glossary"]) or ""
+        self.live.add_suggestion(ko, source, after_id)
+        await self.broadcast_live(display=False)
 
     async def run_live_ticker(self) -> None:
         """auto 방식에서 카운트다운이 끝난 조각을 내보낸다."""

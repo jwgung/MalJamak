@@ -70,6 +70,8 @@ class Chunk:
     reason: str = ""  # 엔진이 이 조각을 자른 이유 (final | pause | boundary | max)
     newline: bool = False  # 자동 줄바꿈(실험)이 이 조각을 새 줄에서 시작하게 함
     break_after: bool = False  # 조작자가 이 조각 뒤에서 줄을 바꿈 (Shift+Enter)
+    kind: str = "stt"  # stt: 음성 인식 · manual: 조작자가 직접 입력 · suggest: 강사 원어의 기계 번역 제안
+    source: str = ""  # suggest: 번역한 원어 (조작자 확인용)
 
 
 @dataclass
@@ -112,6 +114,35 @@ class LiveSession:
         self._trim()
         return chunk, prev_changed
 
+    def _insert(self, chunk: Chunk, after_id: int | None = None, before_time: float | None = None) -> None:
+        """조각을 목록의 알맞은 자리에 넣는다. 자막 화면·기록 파일은 목록 순서를 따른다."""
+        index = len(self.items)
+        if after_id is not None:
+            index = next((i + 1 for i, c in enumerate(self.items) if c.id == after_id), index)
+        elif before_time is not None:
+            index = next((i for i, c in enumerate(self.items) if c.created > before_time), index)
+        self.items.insert(index, chunk)
+
+    def add_manual(self, text: str, after_id: int | None = None, send: bool = True) -> Chunk | None:
+        """조작자가 직접 쓴 조각 (빠진 통역 보완). 기본은 바로 내보낸다."""
+        text = " ".join(text.split())
+        if not text:
+            return None
+        self._seq += 1
+        chunk = Chunk(id=self._seq, text=text, created=time.time(), kind="manual")
+        self._insert(chunk, after_id=after_id)
+        if send:
+            self.send(chunk.id)
+        return chunk
+
+    def add_suggestion(self, text: str, source: str, after_id: int | None = None) -> Chunk:
+        """빠진 통역 자리에 넣는 기계 번역 제안 (조작자가 강사 원어 줄을 골라서 만든다).
+        자동 내보내기 대상이 아니다 — 조작자가 확인해야 나간다."""
+        self._seq += 1
+        chunk = Chunk(id=self._seq, text=" ".join(text.split()), created=time.time(), kind="suggest", source=source.strip())
+        self._insert(chunk, after_id=after_id)
+        return chunk
+
     def find(self, chunk_id: int) -> Chunk | None:
         return next((c for c in self.items if c.id == chunk_id), None)
 
@@ -120,6 +151,8 @@ class LiveSession:
         chunk = self.find(chunk_id)
         if chunk is None or chunk.status == "discarded":
             return False
+        if text is None and not chunk.text:
+            return False  # 번역 제안이 비어 있으면 조작자가 써 넣어야 한다
         if text is not None:
             text = " ".join(text.split())
             if not text:
@@ -180,7 +213,7 @@ class LiveSession:
     def set_review(self, review: str, countdown: float) -> None:
         now = time.time()
         for c in self.items:
-            if c.status == "pending":
+            if c.status == "pending" and c.kind != "suggest":  # 번역 제안은 늘 조작자가 확인
                 c.deadline = now + countdown if review == "auto" else None
 
     def due(self) -> list[Chunk]:
@@ -189,7 +222,8 @@ class LiveSession:
                 if c.status == "pending" and not c.editing and c.deadline is not None and c.deadline <= now]
 
     def send_all_pending(self) -> int:
-        pending = [c for c in self.items if c.status == "pending"]
+        # 번역 제안은 조작자가 하나씩 확인해야 하므로 "모두 내보내기"에서 뺀다
+        pending = [c for c in self.items if c.status == "pending" and c.kind != "suggest"]
         for c in pending:
             self.send(c.id)
         return len(pending)
