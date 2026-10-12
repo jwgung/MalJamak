@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자막</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; cursor: none; overflow: hidden; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; padding: 3vh 4vw; box-sizing: border-box;
+         font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  #box { overflow: hidden; }
+  #text { font-weight: 700; word-break: keep-all; overflow-wrap: anywhere; }
+  #text span { transition: color 0.4s; }
+  #hint { position: fixed; top: 12px; left: 16px; font-size: 14px; color: #555; font-family: system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<div id="hint">이 창을 프로젝터 화면으로 옮긴 뒤 더블클릭하면 전체 화면이 됩니다</div>
+<div id="box"><div id="text"></div></div>
+<script>
+// 조작자가 내보낸 조각만 이어서 보여준다. 고친 조각은 그 자리에서 조용히 바뀐다.
+const text = document.getElementById("text");
+const box = document.getElementById("box");
+let style = { font_size: 56, lines: 3 };
+
+function render(items) {
+  text.style.fontSize = `${style.font_size}px`;
+  text.style.lineHeight = "1.45";
+  box.style.maxHeight = `${style.font_size * 1.45 * style.lines}px`;
+  text.replaceChildren(...items.flatMap((item, i) => {
+    const span = document.createElement("span");
+    span.textContent = item.text;
+    return i ? [document.createTextNode(" "), span] : [span];
+  }));
+  // 최신 줄이 보이도록 아래로 붙인다.
+  box.scrollTop = box.scrollHeight;
+}
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws?role=display`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type !== "display") return;
+    style = msg.style || style;
+    render(msg.items);
+  };
+  ws.onclose = () => setTimeout(connect, 1000);
+}
+
+document.addEventListener("dblclick", () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(() => {});
+});
+document.addEventListener("fullscreenchange", () => {
+  document.getElementById("hint").style.display = document.fullscreenElement ? "none" : "";
+});
+connect();
+</script>
+</body>
+</html>

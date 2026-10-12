@@ -13,8 +13,9 @@ from collections.abc import Callable
 
 from aiohttp import WSMsgType, web
 
-from .config import Config, resource_dir
+from .config import Config, config_dir, resource_dir
 from .groq import Groq
+from .live import LiveSession
 from .paste import Paster
 
 
@@ -35,6 +36,12 @@ class Hub:
         self.engine: web.WebSocketResponse | None = None
         self.overlays: set[web.WebSocketResponse] = set()
         self.watchers: set[web.WebSocketResponse] = set()
+        self.operators: set[web.WebSocketResponse] = set()
+        self.displays: set[web.WebSocketResponse] = set()
+
+        self.live = LiveSession(config_dir() / "transcripts")
+        self.live_on = False
+        self.live_preview = ""
 
         self.listening = False
         self.captions_on = False
@@ -65,6 +72,7 @@ class Hub:
             "engine": self.engine is not None,
             "listening": self.listening,
             "captions": self.captions_on,
+            "live": self.live_on,
             "builtin_translator": self.builtin_translator,
             "local_speech": self.local_speech,
             "groq": bool(cfg["groq"]["api_key"]),
@@ -103,6 +111,13 @@ class Hub:
 
     # ───────── 음성 입력 ─────────
 
+    async def _busy_with_live(self) -> bool:
+        if self.live_on:
+            self.last_error = "현장 자막이 켜져 있는 동안에는 쓸 수 없습니다."
+            await self._changed()
+            return True
+        return False
+
     async def set_input(self, on: bool, hold: bool = False) -> None:
         if hold:
             if on:
@@ -114,6 +129,8 @@ class Hub:
         if on and self.engine is None:
             self.last_error = "엔진(Chrome)이 아직 준비되지 않았습니다."
             await self._changed()
+            return
+        if on and await self._busy_with_live():
             return
         cfg = self.config.get()["input"]
         self.listening = on
@@ -159,6 +176,8 @@ class Hub:
             self.last_error = "엔진(Chrome)이 아직 준비되지 않았습니다."
             await self._changed()
             return
+        if on and await self._busy_with_live():
+            return
         cfg = self.config.get()["captions"]
         self.captions_on = on
         if on:
@@ -181,6 +200,100 @@ class Hub:
 
     async def toggle_captions(self) -> None:
         await self.set_captions(not self.captions_on)
+
+    # ───────── 현장 자막 ─────────
+
+    async def set_live(self, on: bool) -> None:
+        if on == self.live_on:
+            return
+        if on:
+            if self.engine is None:
+                self.last_error = "엔진(Chrome)이 아직 준비되지 않았습니다."
+                await self._changed()
+                return
+            # 같은 엔진·마이크를 쓰므로 다른 인식은 끈다.
+            await self.set_input(False)
+            await self.set_captions(False)
+            cfg = self.config.get()["live"]
+            self.live.start()
+            self.live_on = True
+            self.live_preview = ""
+            await self._send(self.engine, {
+                "cmd": "live_start", "lang": cfg["lang"], "mic": cfg["mic"], "local": cfg["engine"] == "local",
+                "processing": cfg["voice_processing"],
+                "chunk_ms": int(cfg["chunk_seconds"] * 1000), "stable_ms": int(cfg["stable_seconds"] * 1000),
+            })
+        else:
+            self.live_on = False
+            self.live_preview = ""
+            await self._send(self.engine, {"cmd": "live_stop"})
+        await self._changed()
+        await self.broadcast_live()
+
+    async def toggle_live(self) -> None:
+        await self.set_live(not self.live_on)
+
+    def _live_status(self) -> dict:
+        cfg = self.config.get()["live"]
+        return {"live": self.live_on, "engine": self.engine is not None, "review": cfg["review"],
+                "countdown": cfg["countdown"], "transcript": str(self.live.transcript_path()) if self.live.started else "",
+                "last_error": self.last_error}
+
+    async def broadcast_live(self, queue: bool = True, display: bool = True) -> None:
+        if queue:
+            payload = {"type": "queue", "items": self.live.queue_view(), "preview": self.live_preview,
+                       "status": self._live_status()}
+            for ws in list(self.operators):
+                await self._send(ws, payload)
+        if display:
+            cfg = self.config.get()["live"]
+            payload = {"type": "display", "items": self.live.display_view(),
+                       "style": {"font_size": cfg["font_size"], "lines": cfg["lines"]}}
+            for ws in list(self.displays):
+                await self._send(ws, payload)
+
+    async def on_draft(self, text: str) -> None:
+        if not self.live_on:
+            return
+        cfg = self.config.get()["live"]
+        if self.live.add_draft(text, cfg["review"], cfg["countdown"]):
+            await self.broadcast_live(display=False)
+
+    async def on_operator(self, data: dict) -> None:
+        cmd = data.get("cmd")
+        cfg = self.config.get()["live"]
+        chunk_id = data.get("id")
+        changed_display = False
+        if cmd == "send":
+            changed_display = self.live.send(chunk_id, data.get("text"))
+        elif cmd == "discard":
+            changed_display = self.live.discard(chunk_id)
+        elif cmd == "update":
+            chunk = self.live.find(chunk_id)
+            was_sent = chunk is not None and chunk.status == "sent"
+            self.live.update_text(chunk_id, data.get("text", ""), cfg["countdown"])
+            changed_display = was_sent
+        elif cmd == "editing":
+            self.live.set_editing(chunk_id, bool(data.get("on")), cfg["countdown"])
+        elif cmd == "send_all":
+            changed_display = self.live.send_all_pending() > 0
+        elif cmd == "start":
+            await self.set_live(True)
+            return
+        elif cmd == "stop":
+            await self.set_live(False)
+            return
+        await self.broadcast_live(display=changed_display)
+
+    async def run_live_ticker(self) -> None:
+        """auto 방식에서 카운트다운이 끝난 조각을 내보낸다."""
+        while True:
+            await asyncio.sleep(0.2)
+            due = self.live.due()
+            for chunk in due:
+                self.live.send(chunk.id)
+            if due:
+                await self.broadcast_live()
 
     def push_audio(self, pcm16: bytes) -> None:
         """시스템 소리 캡처 스레드에서 호출. 16kHz mono s16le."""
@@ -225,8 +338,12 @@ class Hub:
                 if word:
                     seen.setdefault(word, None)
             patch = {**patch, "glossary": list(seen)[:200]}
+        old_review = self.config.get()["live"]["review"]
         cfg = self.config.update(patch)
         self._apply_groq(cfg)
+        if cfg["live"]["review"] != old_review:
+            self.live.set_review(cfg["live"]["review"], cfg["live"]["countdown"])
+        await self.broadcast_live()
         backend = cfg["input"]["paste_backend"]
         if backend != "auto" and backend != self.paster.backend and self.paster.backend != "dry-run":
             self.paster = Paster(dry_run=False, backend=backend)
@@ -274,6 +391,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     elif role == "settings":
         hub.watchers.add(ws)
         await hub._send(ws, {"type": "status", **hub.status()})
+    elif role == "operator":
+        hub.operators.add(ws)
+        await hub.broadcast_live(display=False)
+    elif role == "display":
+        hub.displays.add(ws)
+        await hub.broadcast_live(queue=False)
     else:
         await ws.close()
         return ws
@@ -281,9 +404,12 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     pending: set[asyncio.Task] = set()
     try:
         async for msg in ws:
-            if msg.type != WSMsgType.TEXT or role != "engine":
+            if msg.type != WSMsgType.TEXT or role not in ("engine", "operator"):
                 continue
             data = msg.json()
+            if role == "operator":
+                await hub.on_operator(data)
+                continue
             kind = data.get("type")
             if kind == "final":
                 text = data.get("text", "").strip()
@@ -294,6 +420,14 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 hub.listening = False
                 hub.last_error = data.get("reason", "")
                 await hub._changed()
+            elif kind == "draft":
+                await hub.on_draft(data.get("text", ""))
+            elif kind == "live_preview":
+                hub.live_preview = data.get("text", "")
+                await hub.broadcast_live(display=False)
+            elif kind == "live_stopped":
+                hub.last_error = data.get("reason", "")
+                await hub.set_live(False)
             elif kind == "captions_stopped":
                 hub.last_error = data.get("reason", "")
                 await hub.set_captions(False)
@@ -321,9 +455,13 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             print("[engine] disconnected", flush=True)
             if hub.captions_on:
                 await hub.set_captions(False)
+            if hub.live_on:
+                await hub.set_live(False)
             await hub._changed()
         hub.overlays.discard(ws)
         hub.watchers.discard(ws)
+        hub.operators.discard(ws)
+        hub.displays.discard(ws)
     return ws
 
 
@@ -332,6 +470,9 @@ async def toggle_handler(request: web.Request) -> web.Response:
     hub: Hub = request.app["hub"]
     if hub.engine is None:
         return web.Response(status=409, text="엔진(Chrome)이 아직 준비되지 않았습니다.\n")
+    if request.path == "/live/toggle":
+        await hub.toggle_live()
+        return web.Response(text=f"live {'on' if hub.live_on else 'off'}\n")
     if request.path == "/captions/toggle":
         await hub.toggle_captions()
         return web.Response(text=f"captions {'on' if hub.captions_on else 'off'}\n")
@@ -370,17 +511,28 @@ async def sources_get(request: web.Request) -> web.Response:
     })
 
 
+async def _open_display(request: web.Request) -> web.Response:
+    """자막 화면을 보이는 Chrome 앱 창으로 띄운다. 프로젝터 모니터로 옮겨 F11 로 전체 화면."""
+    await asyncio.to_thread(request.app["open_display"])
+    return web.Response(text="ok\n")
+
+
 def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
-              audio_sources: Callable[[], list[str]]) -> web.Application:
+              audio_sources: Callable[[], list[str]], open_display: Callable[[], None] = lambda: None) -> web.Application:
     app = web.Application(middlewares=[origin_guard])
     app["hub"] = hub
     app["port"] = port
     app["on_settings"] = on_settings
     app["audio_sources"] = audio_sources
+    app["open_display"] = open_display
     web_dir = resource_dir()
     app.router.add_get("/", lambda r: web.HTTPFound("/settings"))
     app.router.add_get("/engine", lambda r: web.FileResponse(web_dir / "engine.html"))
     app.router.add_get("/settings", lambda r: web.FileResponse(web_dir / "settings.html"))
+    app.router.add_get("/operator", lambda r: web.FileResponse(web_dir / "operator.html"))
+    app.router.add_get("/display", lambda r: web.FileResponse(web_dir / "display.html"))
+    app.router.add_post("/live/toggle", toggle_handler)
+    app.router.add_post("/live/display-window", lambda r: _open_display(r))
     app.router.add_get("/ws", ws_handler)
     app.router.add_post("/toggle", toggle_handler)
     app.router.add_post("/captions/toggle", toggle_handler)
@@ -391,9 +543,11 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
     async def on_startup(_app: web.Application) -> None:
         hub.loop = asyncio.get_running_loop()
         _app["paste_worker"] = asyncio.create_task(hub.run_paste_worker())
+        _app["live_ticker"] = asyncio.create_task(hub.run_live_ticker())
 
     async def on_cleanup(_app: web.Application) -> None:
         _app["paste_worker"].cancel()
+        _app["live_ticker"].cancel()
         if hub.groq:
             await hub.groq.close()
 

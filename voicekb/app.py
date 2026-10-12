@@ -13,7 +13,7 @@ from aiohttp import web
 
 from . import sysaudio
 from .autostart import set_autostart
-from .chrome import ChromeEngine
+from .chrome import ChromeEngine, find_chrome
 from .config import Config, config_dir
 from .hotkey import Hotkey
 from .server import Hub, build_app
@@ -70,7 +70,8 @@ class App:
             self._stopped.wait()
 
     def _start_server(self) -> bool:
-        app = build_app(self.hub, self.port, on_settings=self._on_settings, audio_sources=sysaudio.list_sources)
+        app = build_app(self.hub, self.port, on_settings=self._on_settings, audio_sources=sysaudio.list_sources,
+                        open_display=self.open_display)
         ready = threading.Event()
         result = {"ok": False}
 
@@ -119,6 +120,19 @@ class App:
 
     def open_settings(self) -> None:
         webbrowser.open(f"http://localhost:{self.port}/settings")
+
+    def open_operator(self) -> None:
+        webbrowser.open(f"http://localhost:{self.port}/operator")
+
+    def open_display(self) -> None:
+        """자막 화면은 주소창 없는 Chrome 앱 창으로 띄운다. 프로젝터로 옮겨 더블클릭하면 전체 화면."""
+        url = f"http://localhost:{self.port}/display"
+        chrome = find_chrome()
+        if chrome:
+            subprocess.Popen([chrome, f"--app={url}", "--new-window"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            webbrowser.open(url)
 
     # ───────── 훅 ─────────
 

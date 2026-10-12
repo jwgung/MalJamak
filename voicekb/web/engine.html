@@ -256,6 +256,106 @@ function stopCaptions() {
   c.builtin?.destroy?.();
 }
 
+// ───────────── 현장 자막: 마이크 → 조각(초안) ─────────────
+// 문장 끝을 기다리면 늦으므로, 일정 시간 바뀌지 않은 앞부분 단어를 주기적으로 잘라 조작자에게 보낸다.
+// Chrome 은 중간 결과를 계속 고치므로(예: "로마서 활성화" → "로마서 8장") 아직 흔들리는 끝부분은 남겨 둔다.
+
+const MIN_CHUNK_WORDS = 3;
+let live = null;
+let liveGen = 0;
+
+function resetLiveSession(L) {
+  L.words = []; L.since = []; L.finalCount = 0; L.emitted = 0; L.preview = "";
+}
+
+function emitLive(L, upto) {
+  if (upto <= L.emitted) return;
+  const text = L.words.slice(L.emitted, upto).join(" ");
+  L.emitted = upto;
+  L.lastEmit = performance.now();
+  send({ type: "draft", text });
+}
+
+function sendLivePreview(L) {
+  const preview = L.words.slice(L.emitted).join(" ");
+  if (preview !== L.preview) { L.preview = preview; send({ type: "live_preview", text: preview }); }
+}
+
+function onLiveResult(L, e) {
+  const finals = [], interims = [];
+  for (let i = 0; i < e.results.length; i++) {
+    const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
+    (e.results[i].isFinal ? finals : interims).push(...words);
+  }
+  const words = finals.concat(interims);
+  const now = performance.now();
+  let d = 0;
+  while (d < words.length && d < L.words.length && words[d] === L.words[d]) d++;
+  L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
+  L.words = words;
+  L.finalCount = finals.length;
+  if (L.emitted > words.length) L.emitted = words.length;  // Chrome 이 앞부분을 줄여 고친 경우
+  evaluateLive(L);
+}
+
+function evaluateLive(L) {
+  const now = performance.now();
+  let stable = L.emitted;
+  while (stable < L.words.length && (stable < L.finalCount || now - L.since[stable] >= L.stableMs)) stable++;
+  const available = stable - L.emitted;
+  const sinceEmit = now - L.lastEmit;
+  if (available > 0 && stable >= L.finalCount && L.finalCount === L.words.length) emitLive(L, stable);  // 문장 확정
+  else if (available >= MIN_CHUNK_WORDS && sinceEmit >= L.chunkMs) emitLive(L, stable);
+  else if (available > 0 && sinceEmit >= L.chunkMs * 2) emitLive(L, stable);  // 말이 느려도 너무 오래 쌓아 두지 않는다
+  sendLivePreview(L);
+}
+
+async function startLive(msg) {
+  stopLive();
+  const gen = liveGen;
+  if (msg.local) {
+    try { await ensureLocal(msg.lang); }
+    catch (err) { if (gen === liveGen) send({ type: "live_stopped", reason: err.message }); return; }
+  }
+  // 믹서 직결 소리에는 통화용 보정(잡음 제거·자동 음량)이 오히려 방해가 된다.
+  const audio = { echoCancellation: msg.processing, noiseSuppression: msg.processing, autoGainControl: msg.processing };
+  if (msg.mic) audio.deviceId = { exact: msg.mic };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio }); }
+  catch (err) {
+    if (gen === liveGen) send({ type: "live_stopped", reason: `마이크를 열 수 없습니다: ${err.message}` });
+    return;
+  }
+  if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); return; }
+  const track = stream.getAudioTracks()[0];
+  const r = newRecognition(msg.lang);
+  if (msg.local) r.processLocally = true;
+  const L = { rec: r, stream, chunkMs: msg.chunk_ms || 2000, stableMs: msg.stable_ms || 800, lastEmit: performance.now() };
+  resetLiveSession(L);
+  live = L;
+  const restarter = makeRestarter(() => live === L, () => r.start(track), () => {
+    stopLive();
+    send({ type: "live_stopped", reason: msg.local ? LOCAL_GIVE_UP : "자막 인식 오류가 반복되어 멈췄습니다." });
+  });
+  r.onresult = (e) => { restarter.ok(); onLiveResult(L, e); };
+  r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("live", e.error); };
+  // 세션이 끊기면(침묵·네트워크 오류) 아직 확정 안 된 말까지 조각으로 넘겨 유실을 막는다.
+  r.onend = () => { emitLive(L, L.words.length); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
+  L.timer = setInterval(() => evaluateLive(L), 200);
+  restarter.begin();
+}
+
+function stopLive() {
+  liveGen++;
+  const L = live;
+  if (!L) return;
+  live = null;
+  clearInterval(L.timer);
+  L.rec.onend = null;
+  try { L.rec.stop(); } catch (_) {}
+  L.stream.getTracks().forEach((t) => t.stop());
+}
+
 // ───────────── 서버 연결 ─────────────
 
 async function listMics() {
@@ -289,7 +389,7 @@ function connect() {
   ws = new WebSocket(`ws://${location.host}/ws?role=engine`);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => send({ type: "engine_info", builtin_translator: builtinState, local_speech: localSpeechState() });
-  ws.onclose = () => { stopInput(); stopCaptions(); setTimeout(connect, 1000); };
+  ws.onclose = () => { stopInput(); stopCaptions(); stopLive(); setTimeout(connect, 1000); };
   ws.onmessage = async (e) => {
     if (e.data instanceof ArrayBuffer) { pushAudio(e.data); return; }
     const msg = JSON.parse(e.data);
@@ -298,6 +398,8 @@ function connect() {
       case "input_stop": stopInput(); break;
       case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local); break;
       case "captions_stop": stopCaptions(); break;
+      case "live_start": startLive(msg); break;
+      case "live_stop": stopLive(); break;
       case "list_mics": send({ type: "mics", mics: await listMics() }); break;
       case "translation": applyGroqTranslation(msg.id, msg.ko); break;
     }

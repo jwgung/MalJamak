@@ -31,6 +31,18 @@ DEFAULTS: dict = {
         "font_size": 22,
         "opacity": 0.85,
     },
+    "live": {  # 현장 자막: 마이크 → 조각 → 조작자 검토 → 자막 화면
+        "lang": "ko-KR",
+        "engine": "cloud",
+        "mic": "",  # 믹서 출력을 받는 USB 오디오 인터페이스 등
+        "voice_processing": False,  # 잡음 제거·자동 음량. 믹서 직결이면 끄는 게 낫다
+        "review": "auto",  # auto: 카운트다운 후 자동 내보내기, manual: 조작자가 내보내야 나감
+        "countdown": 3.0,
+        "chunk_seconds": 2.0,  # 이 간격마다 안정된 말을 조각으로 자른다
+        "stable_seconds": 0.8,  # 이 시간 동안 바뀌지 않은 단어만 안정된 것으로 본다
+        "font_size": 56,
+        "lines": 3,
+    },
     "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
     "glossary": [],  # 자주 쓰는 고유명사·용어. Groq 교정·번역에 넘긴다.
     "autostart": False,

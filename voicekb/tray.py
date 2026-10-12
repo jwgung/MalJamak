@@ -31,6 +31,7 @@ class Tray:
                              lambda: app.toggle_input()),
             pystray.MenuItem(lambda _: "자막 끄기" if hub.captions_on else "자막 켜기",
                              lambda: app.toggle_captions()),
+            pystray.MenuItem("현장 자막 (교정 화면)…", lambda: app.open_operator()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("설정…", lambda: app.open_settings(), default=True),
             pystray.MenuItem("종료", lambda: app.quit()),
@@ -44,7 +45,7 @@ class Tray:
             return "starting", "Voice Keyboard — 엔진 준비 중"
         if hub.listening:
             return "listening", "Voice Keyboard — 듣는 중"
-        if hub.captions_on:
+        if hub.captions_on or hub.live_on:
             return "captions", "Voice Keyboard — 자막 중"
         return "idle", "Voice Keyboard — 대기"
 
