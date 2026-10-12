@@ -91,7 +91,7 @@
   #preview { min-height: 22px; font-size: 13px; font-style: italic; color: var(--text-3); white-space: nowrap;
              overflow: hidden; text-overflow: ellipsis; }
   .manualrow { display: flex; align-items: center; gap: 10px; }
-  #manual { flex: 1; height: 40px; font-size: 15px; }
+  #manual { flex: 1; font-size: 15px; }
   #manualAt { font-size: 12px; color: var(--accent); white-space: nowrap; }
 
   /* ── 설정 패널 (오른쪽) ── */
@@ -153,11 +153,11 @@
       <div class="section-title">자막 방식</div>
       <div class="seg" id="modeSeg">
         <button type="button" data-v="normal">일반</button>
-        <button type="button" data-v="interpret">순차통역(한국어만)</button>
+        <button type="button" data-v="interpret" title="강사와 통역사가 번갈아 말할 때 통역 언어만 받습니다">순차통역</button>
       </div>
       <select id="mode" class="vh" tabindex="-1" aria-label="자막 방식">
         <option value="normal">일반</option>
-        <option value="interpret">순차통역 (한국어만)</option>
+        <option value="interpret">순차통역</option>
       </select>
       <label class="field" id="otherWrap" hidden><span>강사 언어 (원어)</span>
         <select id="otherLang"></select></label>

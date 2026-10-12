@@ -21,12 +21,18 @@
   #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px;
           background: rgba(255, 255, 255, 0.08); color: #9a9a9a; font: 14px system-ui, sans-serif; transition: opacity 0.6s; }
   #hint.hidden { opacity: 0; pointer-events: none; }
+  /* 전체 화면 버튼: 마우스를 움직이면 안내와 함께 잠깐 나타난다 */
+  #fs { position: fixed; top: 14px; right: 16px; height: 36px; padding: 0 14px; border-radius: 8px; border: 1px solid rgba(255,255,255,.18);
+        background: rgba(255,255,255,.08); color: #d0d0d0; font: 600 13px system-ui, sans-serif; cursor: pointer; transition: opacity .6s; }
+  #fs:hover { background: rgba(255,255,255,.16); color: #fff; }
+  #fs.hidden { opacity: 0; pointer-events: none; }
   #conn { position: fixed; right: 16px; bottom: 12px; font: 12px system-ui, sans-serif; color: #ff8787; opacity: 0; transition: opacity 0.4s; }
   #conn.show { opacity: 0.8; }
 </style>
 </head>
 <body>
-<div id="hint">이 창을 프로젝터 화면으로 옮긴 뒤 더블클릭하면 전체 화면이 됩니다</div>
+<div id="hint">이 창을 프로젝터 화면으로 옮긴 뒤 전체 화면을 누르세요 (더블클릭도 됩니다)</div>
+<button id="fs" type="button">⛶ 전체 화면</button>
 <div id="conn">● 연결 끊김 — 다시 연결하는 중</div>
 <div id="box"><div id="text"></div></div>
 <script>
@@ -81,24 +87,32 @@ function connect() {
   ws.onclose = () => { document.getElementById("conn").classList.add("show"); setTimeout(connect, 1000); };
 }
 
-// 안내 문구는 처음 몇 초만 보이고, 전체 화면이 아닐 때 마우스를 움직이면 잠깐 다시 보인다.
+// 안내 문구와 전체 화면 버튼은 처음 몇 초만 보이고, 마우스를 움직이면 잠깐 다시 보인다.
+// 전체 화면 중에는 안내는 숨기고 버튼만 "전체 화면 끝내기"로 보여 준다.
+const fsBtn = document.getElementById("fs");
 let hintTimer = null;
-function showHint(ms) {
-  if (document.fullscreenElement) return;
-  hint.classList.remove("hidden");
+function showControls(ms) {
+  const full = !!document.fullscreenElement;
+  hint.classList.toggle("hidden", full);
+  fsBtn.classList.remove("hidden");
   document.body.classList.add("pointer");
   clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => { hint.classList.add("hidden"); document.body.classList.remove("pointer"); }, ms);
+  hintTimer = setTimeout(() => {
+    hint.classList.add("hidden"); fsBtn.classList.add("hidden"); document.body.classList.remove("pointer");
+  }, ms);
 }
-document.addEventListener("mousemove", () => showHint(2500));
-document.addEventListener("dblclick", () => {
+function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen().catch(() => {});
-});
+}
+fsBtn.onclick = (e) => { e.stopPropagation(); toggleFullscreen(); };
+document.addEventListener("mousemove", () => showControls(2500));
+document.addEventListener("dblclick", (e) => { if (e.target !== fsBtn) toggleFullscreen(); });
 document.addEventListener("fullscreenchange", () => {
-  if (document.fullscreenElement) { hint.classList.add("hidden"); document.body.classList.remove("pointer"); }
+  fsBtn.textContent = document.fullscreenElement ? "전체 화면 끝내기" : "⛶ 전체 화면";
+  hint.classList.add("hidden"); fsBtn.classList.add("hidden"); document.body.classList.remove("pointer");
 });
-showHint(6000);
+showControls(6000);
 connect();
 </script>
 </body>

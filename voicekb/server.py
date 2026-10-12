@@ -170,7 +170,7 @@ class Hub:
             full = self.config.get()
             cfg = full["input"]
             if self.groq and cfg["groq_correct"]:
-                text = await self.groq.correct(text, cfg["correction"], full["glossary"], cfg["lang"]) or text
+                text = await self.groq.correct(text, cfg["correction"], cfg["lang"]) or text
             await self._paste_gate.wait()
             if self._pasted_once:
                 text = cfg["separator"] + text
@@ -357,7 +357,7 @@ class Hub:
         if self.groq:
             cfg = self.config.get()
             # 강사 원어 → 자막 언어(통역 언어)
-            ko = await self.groq.translate(source, cfg["live"]["other_lang"], [], cfg["glossary"], cfg["live"]["lang"]) or ""
+            ko = await self.groq.translate(source, cfg["live"]["other_lang"], [], cfg["live"]["lang"]) or ""
         self.live.add_suggestion(ko, source, after_id)
         await self.broadcast_live(display=False)
 
@@ -401,7 +401,7 @@ class Hub:
         if not self.groq:
             return
         ko = await self.groq.translate(data.get("text", ""), data.get("source", ""), data.get("context") or [],
-                                       self.config.get()["glossary"], data.get("target") or "ko-KR")
+                                       data.get("target") or "ko-KR")
         if ko:
             await self._send(ws, {"type": "translation", "id": data.get("id"), "ko": ko})
 
@@ -419,18 +419,6 @@ class Hub:
         return self.mics
 
     async def apply_settings(self, patch: dict) -> dict:
-        if "glossary" in patch:
-            raw = patch["glossary"]
-            items = raw.replace("\n", ",").split(",") if isinstance(raw, str) else raw
-            if not isinstance(items, list):
-                items = []
-            seen: dict[str, None] = {}
-            for item in items:
-                word = str(item).strip()[:60]
-                if word:
-                    seen.setdefault(word, None)
-            patch = {**patch, "glossary": list(seen)[:200]}
-        old_review = self.config.get()["live"]["review"]
         cfg = self.config.update(patch)
         self._apply_groq(cfg)
         if cfg["live"]["review"] != old_review:
@@ -579,10 +567,19 @@ async def toggle_handler(request: web.Request) -> web.Response:
     return web.Response(text=f"input {'on' if hub.listening else 'off'}\n")
 
 
+def mask_key(key: str) -> str:
+    """API 키를 앞 4자·끝 4자만 보이게 가린다 (gsk_••••••••3f9a). 전체 키는 화면에 보내지 않는다."""
+    if not key:
+        return ""
+    if len(key) <= 10:
+        return "•" * len(key)
+    return f"{key[:4]}{'•' * 12}{key[-4:]}"
+
+
 def _public(cfg: dict) -> dict:
     """Groq 키는 화면에 돌려주지 않는다. 설정 여부와 끝 4자리만 알려준다."""
     key = cfg["groq"]["api_key"]
-    cfg["groq"] = {**cfg["groq"], "api_key": "", "key_set": bool(key), "key_hint": key[-4:] if key else ""}
+    cfg["groq"] = {**cfg["groq"], "api_key": "", "key_set": bool(key), "key_mask": mask_key(key)}
     return cfg
 
 

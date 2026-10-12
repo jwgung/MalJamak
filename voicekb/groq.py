@@ -34,8 +34,6 @@ def correct_prompt(strength: str, lang: str = "ko-KR") -> str:
         lines[0] += "\n발음이 비슷한 다른 단어로 잘못 들린 부분이 자주 섞여 있다."
         lines.append("- 문맥상 어색한 단어는 발음이 비슷하면서 문맥에 맞는 단어로 바꾼다."
                      + (' (예: 앞뒤가 다운로드 이야기인데 "다시 봤습니다" → "다시 받습니다")' if korean else ""))
-        lines.append("- 용어 사전의 단어와 발음이 비슷한 부분은 사전 표기로 바꾼다."
-                     + (' (예: 사전에 Groq 이 있으면 "그룹", "크록", "크로키" → "Groq")' if korean else ""))
     else:
         lines.append("- 잘못 들린 단어를 문맥에 맞게 고친다.")
     if korean:
@@ -53,11 +51,6 @@ def translate_prompt(source: str, target: str = "ko-KR") -> str:
     return (f"너는 실시간 자막 번역가다. 입력 문장({lang_name(source)})을 자연스러운 {lang_name(target)} 자막으로 번역한다.\n"
             "- 음성 인식 결과라 오타나 끊긴 문장이 있을 수 있으니 문맥으로 보정한다.\n"
             "- 번역문만 출력한다. 설명, 따옴표, 원문을 붙이지 않는다.")
-
-
-def _glossary_block(glossary: list[str] | None) -> str:
-    words = [w.strip() for w in glossary or [] if w.strip()]
-    return "\n\n용어 사전 (반드시 이 형태로 보존):\n" + ", ".join(words) if words else ""
 
 
 class Groq:
@@ -93,17 +86,15 @@ class Groq:
         text = (data["choices"][0]["message"].get("content") or "").strip()
         return text or None
 
-    async def correct(self, text: str, strength: str = "aggressive", glossary: list[str] | None = None,
-                      lang: str = "ko-KR") -> str | None:
-        system = correct_prompt(strength, lang) + _glossary_block(glossary)
-        return await self._chat(system, text)
+    async def correct(self, text: str, strength: str = "aggressive", lang: str = "ko-KR") -> str | None:
+        return await self._chat(correct_prompt(strength, lang), text)
 
     async def translate(self, text: str, source: str, context: list[str],
-                        glossary: list[str] | None = None, target: str = "ko-KR") -> str | None:
+                        target: str = "ko-KR") -> str | None:
         user = text
         if context:
             user = "직전 자막(참고용, 번역하지 말 것):\n" + "\n".join(context) + "\n\n번역할 문장:\n" + text
-        return await self._chat(translate_prompt(source, target) + _glossary_block(glossary), user)
+        return await self._chat(translate_prompt(source, target), user)
 
     async def close(self) -> None:
         if self._session:

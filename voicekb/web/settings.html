@@ -92,7 +92,6 @@
     <nav class="tabs" role="tablist" aria-label="설정 구역">
       <button type="button" role="tab" data-tab="input">음성 입력</button>
       <button type="button" role="tab" data-tab="captions">PC 소리 자막</button>
-      <button type="button" role="tab" data-tab="glossary">단어장</button>
       <button type="button" role="tab" data-tab="groq">Groq</button>
       <button type="button" role="tab" data-tab="general">일반</button>
     </nav>
@@ -176,23 +175,17 @@
         </div>
       </section>
 
-      <section class="card pane" data-pane="glossary" hidden>
-        <h2>단어장</h2>
-        <p class="lead">자주 쓰는 고유명사·용어를 적어 두면 교정·번역이 이 표기로 맞춥니다.</p>
-        <label class="field"><span>용어 목록</span>
-          <textarea name="glossary" rows="5" placeholder="Groq, GitHub, 사람 이름, 회사 용어 …"></textarea>
-          <small>쉼표나 줄바꿈으로 구분합니다. 비슷하게 들린 말을 이 표기로 고칩니다 (예: "크로키는", "그룹" → Groq).
-            Groq 키가 있을 때만 동작합니다.</small></label>
-      </section>
 
       <section class="card pane" data-pane="groq" hidden>
         <h2>Groq</h2>
         <p class="lead">선택 사항입니다. 키가 있으면 교정과 번역 품질이 올라갑니다.</p>
         <div class="stack">
-          <label class="field"><span>API 키</span>
-            <input type="password" name="groq.api_key" autocomplete="off">
-            <small id="keyHint"></small></label>
-          <div class="row-btn"><button type="button" class="btn sm" id="btnClearKey">키 삭제</button></div>
+          <div class="field"><span>API 키</span>
+            <div style="display:flex; gap:8px">
+              <input type="password" name="groq.api_key" autocomplete="off" aria-label="Groq API 키">
+              <button type="button" class="btn" id="btnClearKey">키 삭제</button>
+            </div>
+            <small id="keyHint"></small></div>
           <label class="field"><span>모델</span>
             <select name="groq.model">
               <option value="openai/gpt-oss-120b">GPT-OSS 120B (추천)</option>
@@ -239,8 +232,8 @@ function ensureOption(select, value, label) {
 function fill(settings) {
   for (const el of fields) {
     const value = getPath(settings, el.name);
-    if (el.name === "groq.api_key") { el.value = ""; continue; }
-    if (el.name === "glossary") { el.value = (value || []).join(", "); continue; }
+    // 키는 서버가 가린 문자열만 준다. 칸에는 가린 키를 흐리게 보여 주고, 새 키를 입력하면 바뀐다.
+    if (el.name === "groq.api_key") { el.value = ""; el.placeholder = settings.groq.key_mask || "gsk_…"; continue; }
     if (el.type === "checkbox") el.checked = !!value;
     else {
       if (el.tagName === "SELECT" && value != null) ensureOption(el, String(value), String(value));
@@ -248,7 +241,7 @@ function fill(settings) {
     }
   }
   $("#keyHint").textContent = settings.groq.key_set
-    ? `키 설정됨 (…${settings.groq.key_hint}). 바꾸려면 새 키를 입력하세요.`
+    ? "키가 저장되어 있습니다. 바꾸려면 새 키를 입력하세요."
     : "키가 없습니다. https://console.groq.com 에서 무료로 발급받을 수 있습니다.";
   document.querySelectorAll(".port").forEach((el) => (el.textContent = settings.port));
 }
@@ -270,7 +263,10 @@ function showStatus(s) {
   // 받기가 필요한 상태일 때만 버튼을 보인다.
   $("#btnTranslator").hidden = !["downloadable", "downloading"].includes(s.builtin_translator);
   set("#sGroq", s.groq ? "키 있음" : "키 없음", s.groq ? "ok" : "");
-  set("#sPaste", s.paste_backend === "dry-run" ? "사용 불가" : s.paste_backend, s.paste_backend === "dry-run" ? "bad" : "");
+  // 붙여넣기 도구 이름(pynput·xdotool 등)은 개발 용어라 칩에는 준비 여부만, 도구 이름은 마우스를 올리면 보인다
+  const pasteOk = s.paste_backend && s.paste_backend !== "dry-run";
+  set("#sPaste", pasteOk ? "준비됨" : "사용 불가", pasteOk ? "ok" : "bad");
+  $("#sPaste").closest(".chip").title = pasteOk ? `Ctrl+V 를 누르는 방법: ${s.paste_backend}` : "붙여넣기 도구가 없습니다 (Linux: xdotool·wtype 설치)";
   set("#sLocal", { supported: "지원", unsupported: "미지원 (Chrome 139+)", unknown: "확인 중…" }[s.local_speech] || s.local_speech,
       s.local_speech === "supported" ? "ok" : s.local_speech === "unsupported" ? "bad" : "");
   $("#error").textContent = s.last_error || "";
@@ -294,7 +290,7 @@ async function loadSources() {
 }
 
 // ── 탭: 한 번에 한 구역만 보이고, 고른 탭은 기억한다 ──
-const TABS = ["input", "captions", "glossary", "groq", "general"];
+const TABS = ["input", "captions", "groq", "general"];
 function selectTab(name, remember = true) {
   if (!TABS.includes(name)) name = "input";
   document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));

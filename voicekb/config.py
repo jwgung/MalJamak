@@ -52,7 +52,6 @@ DEFAULTS: dict = {
         "auto_break": False,  # 자동 줄바꿈(실험, 한국어 전용): 다음 조각이 오면 앞뒤 문맥으로 문장 경계를 추측. 기본은 조작자가 Shift+Enter
     },
     "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
-    "glossary": [],  # 자주 쓰는 고유명사·용어. Groq 교정·번역에 넘긴다.
     "autostart": False,
 }
 
