@@ -1,0 +1,65 @@
+name: ondevice-experiment
+
+# Windows Chrome 에서 기기 내(오프라인) 음성 인식이 되는지 확인하는 실험. exp/** 브랜치에서만 돈다.
+on:
+  push:
+    branches: ["exp/**"]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install aiohttp
+
+      - name: Experiment
+        run: |
+          $dir = "$PWD\experiments\ondevice"
+          $chrome = "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe"
+          & $chrome --version 2>$null; (Get-Item $chrome).VersionInfo.ProductVersion
+          Start-Process python -ArgumentList "-m","http.server","8799","--bind","127.0.0.1","--directory",$dir -WindowStyle Hidden
+          $prof = "$env:RUNNER_TEMP\prof"
+
+          function Start-Engine($extra) {
+            Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2
+            $args = @("--headless=new", "--user-data-dir=$prof", "--no-first-run", "--remote-debugging-port=9333",
+                      "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
+                      "--use-file-for-fake-audio-capture=$dir\ko.wav") + $extra + @("http://localhost:8799/")
+            Start-Process $chrome -ArgumentList $args | Out-Null
+            for ($i = 0; $i -lt 30; $i++) {
+              try { if ((Invoke-RestMethod http://127.0.0.1:9333/json/list) | Where-Object { $_.url -like "*8799*" }) { break } } catch {}
+              Start-Sleep 1
+            }
+            Start-Sleep 8
+          }
+          function Run($label, $wait, $file, $gesture = "1") {
+            "===== $label"
+            python "$dir\run.py" 9333 ko-KR $wait "$dir\$file" $gesture
+          }
+
+          Start-Engine @()
+          Run "online: where" 0 where.js
+          Run "online: available (before)" 0 local_avail.js
+          Run "online: install WITHOUT user gesture" 0 install.js 0
+          Run "online: install with user gesture" 0 install.js 1
+          Run "online: available (after)" 0 local_avail.js
+          Run "online: LOCAL recognition" 25 local_track.js
+          Run "online: CLOUD recognition (baseline)" 15 cloud_track.js
+
+          Start-Engine @("--proxy-server=http://127.0.0.1:9")
+          Run "offline: where" 0 where.js
+          Run "offline: network check" 0 netcheck.js
+          Run "offline: available (before)" 0 local_avail.js
+          Run "offline: install with user gesture" 0 install.js 1
+          Run "offline: available (after)" 0 local_avail.js
+          Run "offline: LOCAL recognition" 25 local_track.js
+          Run "offline: CLOUD recognition (should fail)" 12 cloud_track.js
+          Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+          exit 0
