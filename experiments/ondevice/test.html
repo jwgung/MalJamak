@@ -65,8 +65,9 @@ function start(local, useTrack) {
 document.getElementById("b3").onclick = () => start(true, false).start();
 document.getElementById("b4").onclick = async () => {
   try {
+    const r = start(true, true);  // start() 가 이전 스트림을 정리하므로 먼저 부르고 나서 마이크를 연다
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    start(true, true).start(stream.getAudioTracks()[0]);
+    r.start(stream.getAudioTracks()[0]);
   } catch (e) { log(`마이크/트랙 오류: ${e.name} ${e.message}`); }
 };
 document.getElementById("b5").onclick = () => start(false, false).start();
