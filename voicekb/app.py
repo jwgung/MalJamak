@@ -35,6 +35,7 @@ class App:
         self.hub = Hub(self.config, dry_run=dry_run)
         self.hub.on_change = self._on_change
         self.hub.on_captions = self._on_captions
+        self.hub.on_engine_setup = lambda on: self.engine.switch(on)
         self.audio = sysaudio.SystemAudio(on_pcm=self.hub.push_audio, on_error=self._on_audio_error)
         self.engine = ChromeEngine(f"http://localhost:{self.port}/engine", config_dir() / "chrome-profile",
                                    on_fail=self._notify)

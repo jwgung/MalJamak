@@ -42,12 +42,15 @@ class ChromeEngine:
         self._proc: subprocess.Popen | None = None
         self._running = False
         self._lock = threading.Lock()  # stop() 과 재시작 사이의 경쟁 방지
+        # 설치 모드: 번역 모델처럼 첫 다운로드에 사용자 클릭이 필요한 것을 받기 위해 잠깐 작은 창으로 띄운다.
+        self.setup = False
+        self._switching = False
         self._restarts: list[float] = []
 
     def _command(self, chrome: str) -> list[str]:
         cmd = [
             chrome,
-            "--headless=new",
+            *([] if self.setup else ["--headless=new"]),
             f"--user-data-dir={self.profile_dir}",
             "--no-first-run",
             "--no-default-browser-check",
@@ -57,8 +60,22 @@ class ChromeEngine:
         ]
         # 테스트용 추가 인자 (가짜 마이크 등)
         cmd += shlex.split(os.environ.get("VK_CHROME_ARGS", ""))
-        cmd.append(self.url)
+        if self.setup:
+            cmd += [f"--app={self.url}?setup=translator", "--window-size=520,420"]
+        else:
+            cmd.append(self.url)
         return cmd
+
+    def switch(self, setup: bool) -> None:
+        """숨김 모드 ↔ 설치 모드. 같은 프로필을 쓰므로 지금 엔진을 끄고 새 모드로 다시 띄운다."""
+        with self._lock:
+            if self.setup == setup or not self._running:
+                return
+            self.setup = setup
+            self._switching = True
+            proc = self._proc
+        if proc and proc.poll() is None:
+            proc.terminate()
 
     def start(self) -> None:
         chrome = find_chrome()
@@ -101,10 +118,17 @@ class ChromeEngine:
                     stderr=subprocess.DEVNULL,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
-            print(f"[chrome] 엔진 시작 (pid {self._proc.pid})", flush=True)
+            print(f"[chrome] 엔진 시작 (pid {self._proc.pid}){' — 설치 모드' if self.setup else ''}", flush=True)
             self._proc.wait()
             if not self._running:
                 break
+            with self._lock:
+                switching, self._switching = self._switching, False
+                if not switching and self.setup:
+                    self.setup = False  # 사용자가 설치 창을 닫았다 → 숨김 모드로
+                    switching = True
+            if switching:
+                continue  # 모드 전환은 비정상 종료로 세지 않는다
             now = time.time()
             self._restarts = [t for t in self._restarts if now - t < 60] + [now]
             if len(self._restarts) > self.MAX_RESTARTS_PER_MIN:

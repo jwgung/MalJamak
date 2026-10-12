@@ -81,8 +81,10 @@
   <input id="testUrl" type="text" placeholder="유튜브 링크 (마이크 대신 이 영상 소리로 자막 시험)">
   <label>시작 위치 <input id="testOffset" type="text" placeholder="0:00"></label>
   <button id="btnTestLoad">불러오기</button>
-  <label><input id="useTest" type="checkbox"> 이 소리로 자막 시작</label>
-  <label><input id="testMute" type="checkbox"> 내 쪽 소리 끄기</label>
+  <label>자막 소리
+    <select id="source"><option value="mic">마이크</option><option value="test">테스트 영상</option></select></label>
+  <label title="교정 화면에서도 테스트 영상 소리를 들으며 고칩니다. 꺼도 인식에는 영향이 없습니다.">
+    <input id="testListen" type="checkbox" checked> 교정 화면에서 듣기</label>
   <span id="testState" class="pill"></span>
   <audio id="testPlayer" preload="auto"></audio>
 </div>
@@ -163,7 +165,7 @@ function renderTest() {
   if (status.test_audio && player.dataset.src !== status.test_audio) {
     player.dataset.src = status.test_audio;
     player.src = status.test_audio;
-    $("useTest").checked = true;
+    $("source").value = "test";
   }
   if (!status.live && !player.paused) player.pause();
 }
@@ -323,17 +325,21 @@ $("lines").onchange = () => save({ lines: Number($("lines").value) });
 $("btnLive").onclick = () => {
   const player = $("testPlayer");
   if (status.live) { send({ cmd: "stop" }); player.pause(); return; }
-  const test = $("useTest").checked && status.test?.status === "ready";
+  if ($("source").value === "test" && status.test?.status !== "ready") {
+    $("error").textContent = "테스트 영상을 먼저 불러오세요. 마이크로 하려면 자막 소리를 '마이크'로 바꾸세요.";
+    return;
+  }
+  const test = $("source").value === "test";
   const offset = parseOffset($("testOffset").value);
   send({ cmd: "start", test, offset });
   // 조작자도 같은 소리를 들으며 교정한다. 엔진도 같은 위치에서 재생을 시작한다(1초 안팎 차이).
-  if (test) { player.currentTime = offset; player.muted = $("testMute").checked; player.play().catch(() => {}); }
+  if (test) { player.currentTime = offset; player.muted = !$("testListen").checked; player.play().catch(() => {}); }
 };
 $("btnTestLoad").onclick = () => {
   const url = $("testUrl").value.trim();
   if (url) send({ cmd: "test_load", url });
 };
-$("testMute").onchange = () => { $("testPlayer").muted = $("testMute").checked; };
+$("testListen").onchange = () => { $("testPlayer").muted = !$("testListen").checked; };
 $("btnAll").onclick = sendAll;
 $("btnDisplay").onclick = () => fetch("/live/display-window", { method: "POST" });
 document.addEventListener("keydown", (e) => {

@@ -56,6 +56,7 @@
       <button id="btnInput">음성 입력 시작</button>
       <button id="btnCaptions">자막 켜기</button>
       <button id="btnOperator" onclick="window.open('/operator', '_blank')">현장 자막 (교정 화면)</button>
+      <button id="btnTranslator" hidden>번역 모델 받기</button>
     </div>
   </section>
 
@@ -184,6 +185,8 @@ function showStatus(s) {
                     unsupported: ["지원 안 함", "bad"], unknown: ["확인 중…", ""] }[s.builtin_translator]
                   || [s.builtin_translator, "bad"];
   set("#sBuiltin", ...builtin);
+  // 받기가 필요한 상태일 때만 버튼을 보인다.
+  $("#btnTranslator").hidden = !["downloadable", "downloading"].includes(s.builtin_translator);
   set("#sGroq", s.groq ? "키 있음" : "키 없음", s.groq ? "ok" : "");
   set("#sPaste", s.paste_backend === "dry-run" ? "사용 불가" : s.paste_backend, s.paste_backend === "dry-run" ? "bad" : "");
   set("#sLocal", { supported: "지원", unsupported: "미지원 (Chrome 139+)", unknown: "확인 중…" }[s.local_speech] || s.local_speech,
@@ -239,6 +242,10 @@ $("#btnClearKey").onclick = async () => {
   fill(settings); showStatus(status);
 };
 $("#btnInput").onclick = () => fetch("/toggle", { method: "POST" });
+$("#btnTranslator").onclick = async () => {
+  await fetch("/engine/translator-setup", { method: "POST" });
+  $("#error").textContent = "작은 Chrome 창이 뜨면 '받기'를 눌러 주세요. 끝나면 창이 저절로 닫힙니다.";
+};
 $("#btnCaptions").onclick = () => fetch("/captions/toggle", { method: "POST" });
 
 let engineReady = false;

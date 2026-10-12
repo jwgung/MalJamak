@@ -55,6 +55,7 @@ class Hub:
         # 앱(트레이)이 연결하는 훅
         self.on_change: Callable[[], None] = lambda: None
         self.on_captions: Callable[[bool], None] = lambda on: None
+        self.on_engine_setup: Callable[[bool], None] = lambda on: None  # 번역 모델 받기용 설치 모드 전환
 
         self._pasted_once = False
         self._finals: asyncio.Queue[str] = asyncio.Queue()
@@ -467,6 +468,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             elif kind == "mics":
                 if hub._mics_waiter and not hub._mics_waiter.done():
                     hub._mics_waiter.set_result(data.get("mics", []))
+            elif kind == "setup_done":
+                await asyncio.to_thread(hub.on_engine_setup, False)
             elif kind == "engine_info":
                 hub.builtin_translator = data.get("builtin_translator", "unknown")
                 hub.local_speech = data.get("local_speech", hub.local_speech)
@@ -536,6 +539,13 @@ async def sources_get(request: web.Request) -> web.Response:
     })
 
 
+async def translator_setup(request: web.Request) -> web.Response:
+    """번역 모델 받기: 엔진 Chrome 을 작은 창으로 띄워 사용자가 한 번 클릭하게 한다."""
+    hub: Hub = request.app["hub"]
+    await asyncio.to_thread(hub.on_engine_setup, True)
+    return web.Response(text="ok\n")
+
+
 async def test_audio(request: web.Request) -> web.StreamResponse:
     """불러온 테스트 소리 파일. 엔진(숨긴 Chrome)과 교정 화면이 재생한다. 구간 이동(Range)을 지원한다."""
     hub: Hub = request.app["hub"]
@@ -566,6 +576,7 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
     app.router.add_get("/display", lambda r: web.FileResponse(web_dir / "display.html"))
     app.router.add_post("/live/toggle", toggle_handler)
     app.router.add_get("/live/test-audio", test_audio)
+    app.router.add_post("/engine/translator-setup", translator_setup)
     app.router.add_post("/live/display-window", lambda r: _open_display(r))
     app.router.add_get("/ws", ws_handler)
     app.router.add_post("/toggle", toggle_handler)
