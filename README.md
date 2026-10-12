@@ -18,7 +18,13 @@
  └─ 자막 창 ─ 항상 위의 반투명 창 (별도 프로세스)
 ```
 
-## 실행
+## 설치 (Windows)
+
+[Releases](https://github.com/jwgung/voice-keyboard/releases)에서 `VoiceKeyboard-Setup-<버전>.exe`를 받아 실행한다.
+관리자 권한 없이 `%LOCALAPPDATA%\Programs\VoiceKeyboard`에 설치되고 시작 메뉴에 바로가기가 생긴다.
+코드 서명이 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행".
+
+## 소스에서 실행
 
 ```bash
 python -m venv .venv
