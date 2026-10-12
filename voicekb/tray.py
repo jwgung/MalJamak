@@ -29,7 +29,7 @@ class Tray:
         menu = pystray.Menu(
             pystray.MenuItem(lambda _: "음성 입력 정지" if hub.listening else "음성 입력 시작",
                              lambda: app.toggle_input()),
-            pystray.MenuItem(lambda _: "자막 끄기" if hub.captions_on else "자막 켜기",
+            pystray.MenuItem(lambda _: "PC 소리 자막 끄기" if hub.captions_on else "PC 소리 자막 켜기",
                              lambda: app.toggle_captions()),
             pystray.MenuItem("현장 자막 (교정 화면)…", lambda: app.open_operator()),
             pystray.Menu.SEPARATOR,

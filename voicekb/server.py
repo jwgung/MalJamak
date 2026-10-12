@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import time
 from collections.abc import Callable
 
 from aiohttp import WSMsgType, web
@@ -67,6 +68,8 @@ class Hub:
         self._paste_gate.set()
         self._mics_waiter: asyncio.Future | None = None
         self._last_captions: dict = {"lines": [], "live": None}
+        self._caption_history: dict[int, dict] = {}  # PC 소리 자막 기록 (줄 id → {src, ko})
+        self._caption_file = None
 
     # ───────── 상태 ─────────
 
@@ -188,9 +191,13 @@ class Hub:
             translator = cfg["translator"]
             if translator == "groq" and not self.groq:
                 self.last_error = "Groq 번역을 쓰려면 설정에서 Groq API 키를 넣으세요."
+            self._caption_history = {}
+            self._caption_file = config_dir() / "transcripts" / f"PC자막_{time.strftime('%Y-%m-%d_%H%M%S')}.txt"
             await self._send(self.engine, {
                 "cmd": "captions_start",
                 "lang": cfg["lang"],
+                # 원어가 한국어면 번역하지 않는다
+                "translate": bool(cfg["translate"]) and not cfg["lang"].startswith("ko"),
                 "local": cfg["engine"] == "local",
                 "translator": translator,
                 "groq": self.groq is not None,
@@ -327,6 +334,22 @@ class Hub:
                 self.live.send(chunk.id)
             if due:
                 await self.broadcast_live()
+
+    def record_captions(self, lines: list[dict]) -> None:
+        """확정된 자막 줄을 기록 파일에 남긴다. 번역이 늦게 와서 줄이 바뀌면 다시 쓴다."""
+        changed = False
+        for line in lines:
+            if "id" in line and self._caption_history.get(line["id"]) != line:
+                self._caption_history[line["id"]] = line
+                changed = True
+        if not changed or self._caption_file is None:
+            return
+        out = []
+        for line in self._caption_history.values():
+            src, ko = line.get("src", ""), line.get("ko", "")
+            out.append(src if not ko or ko == src else f"{ko}\n    ({src})")
+        self._caption_file.parent.mkdir(parents=True, exist_ok=True)
+        self._caption_file.write_text("\n".join(out) + "\n", encoding="utf-8")
 
     def push_audio(self, pcm16: bytes) -> None:
         """시스템 소리 캡처 스레드에서 호출. 16kHz mono s16le."""
@@ -466,6 +489,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 await hub.set_captions(False)
             elif kind == "captions":
                 hub._last_captions = {"lines": data.get("lines", []), "live": data.get("live")}
+                hub.record_captions(data.get("lines", []))
                 for o in list(hub.overlays):
                     await hub._send(o, {"type": "captions", **hub._last_captions})
             elif kind == "translate":

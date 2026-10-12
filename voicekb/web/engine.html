@@ -142,11 +142,12 @@ async function createBuiltinTranslator(source) {
 
 function publish(c) {
   if (cap !== c) return;
-  send({ type: "captions", lines: c.lines.map(({ src, ko }) => ({ src, ko })), live: c.live });
+  send({ type: "captions", lines: c.lines.map(({ id, src, ko }) => ({ id, src, ko })), live: c.live });
 }
 
 async function translateLive(c, text) {
   if (!text) return "";
+  if (!c.translate) return text;  // 번역 없이 원문 그대로 (한국어 회의 등)
   if (c.builtin) return c.builtin.translate(text).catch(() => "");
   return "";  // Groq 는 확정 문장에만 쓴다
 }
@@ -164,7 +165,7 @@ async function flushSentence(c) {
   const src = c.buffer.trim();
   c.buffer = "";
   if (!src || cap !== c) return;
-  const line = { id: ++lineSeq, src, ko: "" };
+  const line = { id: ++lineSeq, src, ko: c.translate ? "" : src };
   const context = c.lines.map((l) => l.src).slice(-2);
   c.lines.push(line);
   if (c.lines.length > MAX_LINES) c.lines.shift();
@@ -185,7 +186,7 @@ function applyGroqTranslation(id, ko) {
   publish(cap);
 }
 
-async function startCaptions(lang, translator, groqAvailable, local) {
+async function startCaptions(lang, translator, groqAvailable, local, translate = true) {
   stopCaptions();
   const gen = capGen;
   if (local) {
@@ -194,11 +195,11 @@ async function startCaptions(lang, translator, groqAvailable, local) {
   }
   const source = lang.split("-")[0];
   let builtin = null;
-  if (translator === "auto" || translator === "builtin") {
+  if (translate && (translator === "auto" || translator === "builtin")) {
     try { builtin = await createBuiltinTranslator(source); }
     catch (err) { report("translator", err.message); }
   }
-  const useGroq = groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
+  const useGroq = translate && groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
   if (gen !== capGen) { builtin?.destroy?.(); return; }
 
   // 서버가 보내는 PCM 을 오디오 트랙으로 만든다.
@@ -206,7 +207,7 @@ async function startCaptions(lang, translator, groqAvailable, local) {
   const writer = generator.writable.getWriter();
   const r = newRecognition(lang);
   if (local) r.processLocally = true;
-  const c = { rec: r, generator, writer, builtin, useGroq, lang, lines: [], live: null,
+  const c = { rec: r, generator, writer, builtin, useGroq, translate, lang, lines: [], live: null,
               buffer: "", flushTimer: null, timestamp: 0, liveSeq: 0 };
   cap = c;
 
@@ -462,7 +463,7 @@ function connect() {
     switch (msg.cmd || msg.type) {
       case "input_start": startInput(msg.lang, msg.mic, msg.local); break;
       case "input_stop": stopInput(); break;
-      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local); break;
+      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local, msg.translate); break;
       case "captions_stop": stopCaptions(); break;
       case "live_start": startLive(msg); break;
       case "live_stop": stopLive(); break;

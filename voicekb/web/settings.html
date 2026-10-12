@@ -54,7 +54,7 @@
     <div id="error" class="hint bad"></div>
     <div class="buttons">
       <button id="btnInput">음성 입력 시작</button>
-      <button id="btnCaptions">자막 켜기</button>
+      <button id="btnCaptions">PC 소리 자막 켜기</button>
       <button id="btnOperator" onclick="window.open('/operator', '_blank')">현장 자막 (교정 화면)</button>
       <button id="btnTranslator" hidden>번역 모델 받기</button>
     </div>
@@ -92,10 +92,15 @@
     </section>
 
     <section>
-      <h2>번역 자막 — PC 소리 → 한국어</h2>
-      <label class="row"><span>원어</span>
+      <h2>PC 소리 자막 — 회의·강의·통화 소리를 내 화면 위 자막으로</h2>
+      <label class="row"><span>말하는 언어</span>
         <select name="captions.lang">
-          <option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
+          <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
+        </select></label>
+      <label class="row"><span>번역</span>
+        <select name="captions.translate">
+          <option value="false">번역 안 함 — 들리는 말 그대로</option>
+          <option value="true">한국어로 번역 (외국어일 때)</option>
         </select></label>
       <label class="row"><span>인식 방식</span>
         <select name="captions.engine">
@@ -103,7 +108,7 @@
           <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
         </select></label>
       <label class="row"><span>소리 출처</span><select name="captions.source"><option value="loopback">PC 소리 (기본 스피커 출력)</option></select></label>
-      <label class="row"><span>번역 엔진</span>
+      <label class="row"><span>번역 엔진 (번역할 때)</span>
         <select name="captions.translator">
           <option value="auto">자동 (내장 번역 → 안 되면 Groq)</option>
           <option value="builtin">Chrome 내장 번역만</option>
@@ -111,8 +116,10 @@
         </select></label>
       <label class="row"><span>글자 크기</span><input type="number" name="captions.font_size" min="12" max="64"></label>
       <label class="row"><span>투명도</span><input type="number" name="captions.opacity" min="0.3" max="1" step="0.05"></label>
-      <p class="hint">macOS 는 PC 소리를 직접 받을 수 없어 BlackHole 같은 가상 장치를 소리 출처로 고릅니다.
-        자막 창은 드래그로 옮기고 더블클릭으로 원문 표시를 켜고 끕니다.</p>
+      <p class="hint">Zoom·화상회의·온라인 강의 소리를 화면 위 자막 창에 바로 띄웁니다. 내 목소리는 빼고 상대방 말만 나옵니다.
+        자막 창은 드래그로 옮기고, <b>마우스 휠로 지난 자막</b>을 다시 보며, 더블클릭으로 원문 표시를 켜고 끕니다.
+        자막은 설정 폴더의 transcripts 에 "PC자막_날짜.txt"로 저장됩니다.
+        macOS 는 PC 소리를 직접 받을 수 없어 BlackHole 같은 가상 장치를 소리 출처로 고릅니다.</p>
     </section>
 
     <section>
@@ -193,7 +200,7 @@ function showStatus(s) {
       s.local_speech === "supported" ? "ok" : s.local_speech === "unsupported" ? "bad" : "");
   $("#error").textContent = s.last_error || "";
   $("#btnInput").textContent = s.listening ? "음성 입력 정지" : "음성 입력 시작";
-  $("#btnCaptions").textContent = s.captions ? "자막 끄기" : "자막 켜기";
+  $("#btnCaptions").textContent = s.captions ? "PC 소리 자막 끄기" : "PC 소리 자막 켜기";
 }
 
 async function loadSources() {
@@ -225,6 +232,7 @@ $("#form").onsubmit = async (e) => {
   for (const el of fields) {
     if (el.name === "groq.api_key") { if (el.value.trim()) setPath(patch, el.name, el.value.trim()); continue; }
     let value = el.type === "checkbox" ? el.checked : el.value;
+    if (el.tagName === "SELECT" && (value === "true" || value === "false")) value = value === "true";  // 켜기/끄기 선택
     if (el.type === "number") value = Number(value);
     setPath(patch, el.name, value);
   }

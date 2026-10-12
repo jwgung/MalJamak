@@ -23,12 +23,13 @@ DEFAULTS: dict = {
         "correction": "aggressive",  # aggressive: 발음이 비슷한 단어까지 문맥으로 교정, conservative: 띄어쓰기·명백한 오류만
         "paste_backend": "auto",
     },
-    "captions": {
-        "lang": "en-US",
+    "captions": {  # PC 소리 자막: 회의·강의·통화 소리를 내 화면 위 자막 창으로 (개인용, 검토 없음)
+        "lang": "ko-KR",
+        "translate": False,  # True 면 한국어로 번역 (원어가 외국어일 때)
         "engine": "cloud",
         "source": "loopback",  # loopback: 기본 스피커 출력, 그 외: 입력 장치 이름 (BlackHole 등)
-        "translator": "auto",  # auto: 내장 번역 → Groq, builtin, groq
-        "font_size": 22,
+        "translator": "auto",  # 번역할 때: auto(내장 번역 → Groq), builtin, groq
+        "font_size": 26,
         "opacity": 0.85,
     },
     "live": {  # 현장 자막: 마이크 → 조각 → 조작자 검토 → 자막 화면
@@ -86,7 +87,12 @@ class Config:
         self.data = copy.deepcopy(DEFAULTS)
         if self.path.exists():
             try:
-                self.data = _merge(DEFAULTS, json.loads(self.path.read_text(encoding="utf-8")))
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                self.data = _merge(DEFAULTS, raw)
+                # v0.3 이전 설정: 자막은 늘 번역이었다. 원어가 외국어로 저장돼 있으면 번역을 켠 것으로 이어받는다.
+                old_captions = raw.get("captions") if isinstance(raw, dict) else None
+                if isinstance(old_captions, dict) and "translate" not in old_captions:
+                    self.data["captions"]["translate"] = not str(self.data["captions"]["lang"]).startswith("ko")
             except (OSError, ValueError) as err:
                 print(f"[config] 읽기 실패, 기본값 사용: {err}", flush=True)
         # 설정 파일에 키가 없으면 환경변수를 쓴다.
