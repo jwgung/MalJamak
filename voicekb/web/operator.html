@@ -4,143 +4,231 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>현장 자막 교정</title>
+<link rel="stylesheet" href="/ui.css">
 <style>
-  :root { --bg: #f7f7f8; --card: #fff; --fg: #111; --muted: #6b7280; --border: #e5e7eb; --accent: #2563eb;
-          --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --pending: #fffbeb; --focus: #dbeafe; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #111214; --card: #1b1c1f; --fg: #eee; --muted: #9ca3af; --border: #2c2d31;
-            --pending: #2a2416; --focus: #172554; }
-  }
-  * { box-sizing: border-box; }
+  /* 색·버튼·칩은 /ui.css 토큰을 쓴다. 여기에는 이 화면의 배치만 둔다. */
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
-  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg);
-         display: flex; flex-direction: column; }
-  header { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--card);
-           display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  header h1 { font-size: 16px; margin: 0 8px 0 0; }
-  button, select, input[type=number] { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
-           background: transparent; color: inherit; font: inherit; }
-  button { cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  button.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
-  select option { background: var(--card); }
-  input[type=number] { width: 70px; }
-  .grow { flex: 1; }
-  .pill { font-size: 13px; color: var(--muted); }
-  .pill.on { color: var(--bad); font-weight: 600; }
-  #error { color: var(--bad); font-size: 13px; padding: 0 16px; }
-  details { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--card); }
-  details .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; margin-top: 8px; }
-  details label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
-  details label select, details label input { color: var(--fg); }
-  main { flex: 1; overflow-y: auto; padding: 12px 16px; }
-  .item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; margin-bottom: 4px;
-          border: 1px solid transparent; }
-  .item.pending { background: var(--pending); border-color: var(--border); }
-  .item.focused { outline: 2px solid var(--accent); background: var(--focus); }
-  .item.sent .text { color: var(--muted); }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+  .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); opacity: 0; pointer-events: none; }
+
+  /* ── 상단 바: 한 줄 ── */
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 20px; background: var(--surface);
+            border-bottom: 1px solid var(--line); flex-shrink: 0; }
+  .topbar h1 { font-size: 16px; margin-right: 2px; white-space: nowrap; }
+  #counts { font-size: 13px; color: var(--text-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  #counts b { color: var(--text-2); font-weight: 600; }
+  .spacer { flex: 1; }
+  #btnSettings[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
+
+  #error { margin: 10px 20px 0; padding: 8px 14px; border-radius: var(--radius-sm); background: var(--live-soft);
+           color: var(--live); font-size: 13px; font-weight: 600; cursor: pointer; flex-shrink: 0; }
+  #error:empty { display: none; }
+  #error::after { content: "  ✕"; opacity: .6; }
+
+  /* ── 본문: 큐 + 설정 패널 ── */
+  .shell { flex: 1; display: flex; min-height: 0; position: relative; }
+  .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #list { flex: 1; overflow-y: auto; padding: 16px max(20px, calc((100% - 920px) / 2)) 12px; }
+
+  /* 큐 조각 */
+  .item { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; overflow: hidden;
+          border: 1px solid transparent; border-radius: var(--radius-sm); }
   .item.discarded { display: none; }
-  /* 조작자 줄바꿈(Shift+Enter): 이 조각 뒤에서 자막 화면 줄이 바뀐다 */
-  .item.brk { border-bottom: 2px solid var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 10px; }
-  .item .brkmark { color: var(--accent); font-weight: 700; width: 16px; flex-shrink: 0; }
-  .item .text { flex: 1; font-size: 17px; border: none; background: transparent; color: inherit; font: inherit;
-                font-size: 17px; padding: 4px 6px; border-radius: 6px; min-width: 0; }
-  .item .text:focus { outline: none; background: var(--card); }
-  .item .meta { font-size: 12px; color: var(--muted); width: 54px; text-align: right; flex-shrink: 0; }
-  .item .bar { width: 60px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; flex-shrink: 0; }
+  .item .text { flex: 1; min-width: 0; border: none; background: transparent; color: inherit; font: inherit;
+                padding: 4px 6px; border-radius: 6px; outline: none; }
+  .item .text:focus { background: transparent; }
+  .item .brkmark { color: var(--accent); font-weight: 700; flex-shrink: 0; }
+  .item .meta { font-size: 12px; color: var(--text-3); flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .item .acts { display: flex; gap: 4px; flex-shrink: 0; opacity: 0; pointer-events: none; transition: opacity .12s; }
+  .item:hover .acts, .item.focused .acts { opacity: 1; pointer-events: auto; }
+  .item .srcline { flex-basis: 100%; font-size: 12px; color: var(--text-3); padding: 0 6px; }
+  .item .kbdhint { display: none; flex-basis: 100%; font-size: 12px; color: var(--text-3); padding: 2px 6px 0; }
+  .item.pending.focused .kbdhint { display: block; }
+  .item .bar { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; }
   .item .bar i { display: block; height: 100%; background: var(--warn); }
-  .item button { padding: 4px 10px; font-size: 13px; }
-  #testbar { padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--card);
-             display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
-  #testbar input[type=text] { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
-             background: transparent; color: inherit; font: inherit; }
-  #testUrl { flex: 1; min-width: 220px; }
-  #testOffset { width: 72px; }
-  #testState.ready { color: var(--ok); } #testState.error { color: var(--bad); }
+  /* 조작자 줄바꿈(Shift+Enter): 이 조각 뒤에서 자막 화면 줄이 바뀐다 */
+  .item.brk { border-bottom: 2px solid var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 8px; }
+
+  /* 나간 조각: 작고 흐린 자막 기록 */
+  .item.sent { padding: 2px 8px; font-size: 14px; color: var(--text-3); }
+  .item.sent .text { color: var(--text-3); padding: 2px 6px; }
+  .item.sent.focused { background: var(--surface-2); border-color: var(--line); }
+  .item.sent.focused .text { color: var(--text); }
+
+  /* 대기 조각: 강조 카드 */
+  .item.pending { padding: 12px 14px 14px; margin: 8px 0; font-size: 19px; line-height: 1.5; background: var(--surface);
+                  border-color: var(--line); box-shadow: var(--shadow); }
+  .item.pending .meta { font-size: 12px; }
+  .item.pending .bar { display: block; }
+  .item.pending.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
+  .item.pending .brkmark { font-size: 16px; }
+
   /* 누락 의심 자리의 기계 번역 제안: 조작자가 확인해야 나간다 */
-  .item.suggest { border-left: 4px solid #8b5cf6; flex-wrap: wrap; }
-  .item .srcline { flex-basis: 100%; font-size: 12px; color: var(--muted); padding: 0 6px; }
-  .item.suggest .meta { color: #8b5cf6; width: auto; }
+  .item.suggest { border-left: 4px solid var(--suggest); }
+  .item.suggest.pending { background: var(--suggest-soft); }
+  .item.suggest .meta { color: var(--suggest); font-weight: 600; }
+  .item.suggest.pending .meta { order: -2; flex-basis: 100%; text-align: left; padding: 0 6px; }
+  .item.suggest .srcline { order: -1; }
   .item.manual .meta { color: var(--ok); }
-  #manualbar { padding: 8px 16px; border-top: 1px solid var(--border); background: var(--card); display: flex; gap: 8px; align-items: center; }
-  #manual { flex: 1; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; font: inherit; font-size: 16px; }
-  #manualAt { font-size: 12px; color: var(--accent); }
-  #other { padding: 8px 16px; border-top: 1px solid var(--border); background: var(--card); font-size: 13px; color: var(--muted); }
-  #other b { color: var(--fg); font-weight: 600; margin-right: 6px; }
-  #other div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; font-size: 12px; font-weight: 700; color: var(--text-3); }
+  .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); }
+  .divider::before { flex: 0 0 12px; }
+  .divider::after { flex: 1; order: 1; }
+  .divider .btn { order: 2; }
+
+  /* ── 하단 독 ── */
+  .dock { flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--line);
+          padding: 8px max(20px, calc((100% - 920px) / 2)) 14px; display: flex; flex-direction: column; gap: 6px; }
+  #other { font-size: 13px; color: var(--text-3); padding: 4px 0 6px; border-bottom: 1px dashed var(--line); }
+  #other .ohead { display: flex; gap: 10px; align-items: baseline; margin-bottom: 2px; }
+  #other .ohead b { color: var(--text-2); font-weight: 700; font-size: 12px; }
+  #other .ohead .hint { font-size: 12px; }
+  #other .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #other .src { cursor: pointer; border-radius: 6px; padding: 1px 4px; }
-  #other .src:hover { background: var(--focus); color: var(--fg); }
-  #other .hint { font-size: 11px; margin-left: 6px; }
-  #preview { padding: 10px 16px; border-top: 1px solid var(--border); background: var(--card); color: var(--muted);
-             font-style: italic; min-height: 44px; }
-  footer { padding: 6px 16px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
-  kbd { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  #other .src:hover { background: var(--accent-soft); color: var(--text); }
+  #preview { min-height: 22px; font-size: 13px; font-style: italic; color: var(--text-3); white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
+  .manualrow { display: flex; align-items: center; gap: 10px; }
+  #manual { flex: 1; height: 40px; font-size: 15px; }
+  #manualAt { font-size: 12px; color: var(--accent); white-space: nowrap; }
+
+  /* ── 설정 패널 (오른쪽) ── */
+  .panel { display: none; width: 340px; flex-shrink: 0; flex-direction: column; gap: 22px; overflow-y: auto; padding: 18px 20px 24px;
+           background: var(--surface); border-left: 1px solid var(--line); }
+  body.panel-open .panel { display: flex; }
+  .panel section { display: flex; flex-direction: column; gap: 10px; }
+  .panel .section-title { padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  .panel .seg { display: flex; }
+  .panel .seg button { flex: 1; padding: 0 8px; }
+  .panel .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .panel .row { display: flex; gap: 8px; align-items: flex-end; }
+  .panel .row .field { flex: 1; min-width: 0; }
+  #testState { min-height: 18px; word-break: break-all; }
+  #testState.ready { color: var(--ok); }
+  #testState.error { color: var(--live); }
+  #file { font-size: 11px; color: var(--text-3); word-break: break-all; }
+  @media (max-width: 1199px) {
+    .panel { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg); }
+  }
+
+  /* ── 단축키 도움말 ── */
+  #help { position: fixed; inset: 0; z-index: 50; }
+  #help .box { position: absolute; top: 60px; right: 20px; width: 380px; max-width: calc(100vw - 32px); padding: 18px 20px;
+               box-shadow: var(--shadow-lg); }
+  #help h2 { font-size: 14px; margin-bottom: 12px; }
+  #help dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: baseline; }
+  #help dt { white-space: nowrap; } #help dd { margin: 0; color: var(--text-2); font-size: 13px; }
+  #help .note { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
+  #help .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--suggest); margin-right: 6px; }
 </style>
 </head>
 <body>
-<header>
+<header class="topbar">
   <h1>현장 자막</h1>
-  <button id="btnLive" class="primary">자막 시작</button>
-  <span id="state" class="pill">대기</span>
-  <span class="grow"></span>
-  <label class="pill">자막 방식
-    <select id="mode">
-      <option value="normal">일반</option>
-      <option value="interpret">순차통역 (한국어만)</option>
-    </select></label>
-  <label class="pill" id="otherWrap" hidden>강사 언어
-    <select id="otherLang"><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></label>
-  <label class="pill">검토
-    <select id="review">
-      <option value="auto">자동 내보내기</option>
-      <option value="manual">승인해야 내보내기</option>
-    </select></label>
-  <label class="pill">카운트다운 <input id="countdown" type="number" min="1" max="30" step="0.5">초</label>
-  <button id="btnAll">대기 중 모두 내보내기</button>
-  <button id="btnDisplay">자막 화면 열기</button>
+  <span id="state" class="chip"><i class="dot"></i><span id="stateText">대기</span></span>
+  <span id="counts"></span>
+  <span class="spacer"></span>
+  <button id="btnLive" class="btn lg primary">자막 시작</button>
+  <button id="btnDisplay" class="btn">자막 화면 열기</button>
+  <button id="btnHelp" class="btn ghost icon" title="단축키">?</button>
+  <button id="btnSettings" class="btn ghost icon" title="설정" aria-pressed="false">⚙</button>
 </header>
-<div id="error"></div>
-<div id="testbar">
-  <b>테스트 소리</b>
-  <input id="testUrl" type="text" placeholder="유튜브 링크 (마이크 대신 이 영상 소리로 자막 시험)">
-  <label>시작 위치 <input id="testOffset" type="text" placeholder="0:00"></label>
-  <button id="btnTestLoad">불러오기</button>
-  <label>자막 소리
-    <select id="source"><option value="mic">마이크</option><option value="test">테스트 영상</option></select></label>
-  <label title="교정 화면에서도 테스트 영상 소리를 들으며 고칩니다. 꺼도 인식에는 영향이 없습니다.">
-    <input id="testListen" type="checkbox" checked> 교정 화면에서 듣기</label>
-  <span id="testState" class="pill"></span>
-  <audio id="testPlayer" preload="auto"></audio>
-</div>
-<details>
-  <summary>소리·화면 설정</summary>
-  <div class="grid">
-    <label>소리 입력 (믹서 출력·마이크)<select id="mic"><option value="">기본 마이크</option></select></label>
-    <label>언어<select id="lang"><option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
-    <label>인식 방식<select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option></select></label>
-    <label>통화용 보정 (잡음 제거·자동 음량)<select id="processing"><option value="false">끄기 — 믹서 직결</option><option value="true">켜기 — 공간 마이크</option></select></label>
-    <label>쉼 감지 (초) — 말이 이만큼 멈추면 자름<input id="pause" type="number" min="0.3" max="3" step="0.1"></label>
-    <label>최대 대기 (초) — 자를 곳이 없어도 이만큼 지나면 자름<input id="maxwait" type="number" min="1" max="15" step="0.5"></label>
-    <label>안정 판정 (초)<input id="stable" type="number" min="0.3" max="3" step="0.1"></label>
-    <label>자막 글자 크기 (px)<input id="font" type="number" min="20" max="160" step="2"></label>
-    <label>자막 줄 수<input id="lines" type="number" min="1" max="8"></label>
-    <label>자동 줄바꿈 (실험)<select id="autobreak"><option value="false">끄기 — Shift+Enter 로 직접</option><option value="true">켜기 — 앞뒤 문맥으로 추측</option></select></label>
+<div id="error" title="눌러서 닫기"></div>
+<div class="shell">
+  <div class="stage">
+    <main id="list"></main>
+    <div class="dock">
+      <div id="other" hidden></div>
+      <div id="preview"></div>
+      <div class="manualrow">
+        <input id="manual" type="text" placeholder="직접 입력 — 빠진 말을 쓰고 Enter 로 바로 내보내기">
+        <span id="manualAt"></span>
+      </div>
+    </div>
   </div>
-  <p class="pill">조각은 문장 끝 → 말 멈춤 → "~다, ~요, ~고, ~는데" 같은 어미 순으로 자연스러운 곳에서 자릅니다.
-    소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</p>
-</details>
-<main id="list"></main>
-<div id="other" hidden></div>
-<div id="manualbar">
-  <input id="manual" placeholder="직접 입력 — 빠진 말을 쓰고 Enter 로 바로 내보내기 (조각에서 Insert 를 누르면 그 뒤에 들어감)">
-  <span id="manualAt"></span>
+  <aside class="panel" id="panel">
+    <section>
+      <div class="section-title">자막 방식</div>
+      <div class="seg" id="modeSeg">
+        <button type="button" data-v="normal">일반</button>
+        <button type="button" data-v="interpret">순차통역(한국어만)</button>
+      </div>
+      <select id="mode" class="vh" tabindex="-1" aria-label="자막 방식">
+        <option value="normal">일반</option>
+        <option value="interpret">순차통역 (한국어만)</option>
+      </select>
+      <label class="field" id="otherWrap" hidden><span>강사 언어</span>
+        <select id="otherLang"><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></label>
+    </section>
+    <section>
+      <div class="section-title">검토</div>
+      <div class="seg" id="reviewSeg">
+        <button type="button" data-v="auto">자동 내보내기</button>
+        <button type="button" data-v="manual">승인해야 내보내기</button>
+      </div>
+      <select id="review" class="vh" tabindex="-1" aria-label="검토">
+        <option value="auto">자동 내보내기</option>
+        <option value="manual">승인해야 내보내기</option>
+      </select>
+      <label class="field"><span>카운트다운 (초)</span><input id="countdown" type="number" min="1" max="30" step="0.5"></label>
+      <small class="hint">고치기 시작하면 카운트다운이 멈춥니다.</small>
+    </section>
+    <section>
+      <div class="section-title">소리</div>
+      <label class="field"><span>소리 입력 (믹서 출력·마이크)</span><select id="mic"><option value="">기본 마이크</option></select></label>
+      <div class="two">
+        <label class="field"><span>언어</span><select id="lang"><option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
+        <label class="field"><span>인식 방식</span><select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option></select></label>
+      </div>
+      <label class="field"><span>통화용 보정 (잡음 제거·자동 음량)</span><select id="processing"><option value="false">끄기 — 믹서 직결</option><option value="true">켜기 — 공간 마이크</option></select></label>
+      <small class="hint">소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</small>
+    </section>
+    <section>
+      <div class="section-title">테스트 소리 (유튜브)</div>
+      <label class="field"><span>유튜브 링크</span><input id="testUrl" type="text" placeholder="마이크 대신 이 영상 소리로 자막 시험"></label>
+      <div class="row">
+        <label class="field"><span>시작 위치</span><input id="testOffset" type="text" placeholder="0:00"></label>
+        <button id="btnTestLoad" class="btn">불러오기</button>
+      </div>
+      <label class="field"><span>자막 소리</span>
+        <select id="source"><option value="mic">마이크</option><option value="test">테스트 영상</option></select></label>
+      <label class="check" title="교정 화면에서도 테스트 영상 소리를 들으며 고칩니다. 꺼도 인식에는 영향이 없습니다.">
+        <input id="testListen" type="checkbox" checked> 교정 화면에서 듣기</label>
+      <small id="testState" class="hint"></small>
+      <audio id="testPlayer" preload="auto"></audio>
+    </section>
+    <section>
+      <div class="section-title">고급</div>
+      <small class="hint">조각은 문장 끝 → 말 멈춤 → "~다, ~요, ~고, ~는데" 같은 어미 순으로 자연스러운 곳에서 자릅니다.</small>
+      <div class="two">
+        <label class="field" title="말이 이만큼 멈추면 자름"><span>쉼 감지 (초)</span><input id="pause" type="number" min="0.3" max="3" step="0.1"></label>
+        <label class="field" title="자를 곳이 없어도 이만큼 지나면 자름"><span>최대 대기 (초)</span><input id="maxwait" type="number" min="1" max="15" step="0.5"></label>
+        <label class="field"><span>안정 판정 (초)</span><input id="stable" type="number" min="0.3" max="3" step="0.1"></label>
+        <label class="field"><span>글자 크기 (px)</span><input id="font" type="number" min="20" max="160" step="2"></label>
+        <label class="field"><span>자막 줄 수</span><input id="lines" type="number" min="1" max="8"></label>
+      </div>
+      <label class="field"><span>자동 줄바꿈 (실험)</span><select id="autobreak"><option value="false">끄기 — Shift+Enter 로 직접</option><option value="true">켜기 — 앞뒤 문맥으로 추측</option></select></label>
+    </section>
+    <div id="file"></div>
+  </aside>
 </div>
-<div id="preview"></div>
-<footer>
-  <kbd>Enter</kbd> 내보내기(고친 내용 포함) · <kbd>Shift</kbd>+<kbd>Enter</kbd> 내보내고 줄바꿈(나간 조각은 줄바꿈 켜기/끄기) · <kbd>Esc</kbd> 버리기 · <kbd>↑</kbd><kbd>↓</kbd> 이동 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 대기 중 모두 내보내기
-  · <kbd>Insert</kbd> 이 조각 뒤에 직접 입력 · 보라색은 강사 원어의 기계 번역 제안(확인해야 나감)
-  · 고치기 시작하면 카운트다운이 멈춥니다 · <span id="file"></span>
-</footer>
+
+<div id="help" hidden>
+  <div class="box card" role="dialog" aria-label="단축키">
+    <h2>단축키</h2>
+    <dl>
+      <dt><kbd>Enter</kbd></dt><dd>내보내기 (고친 내용 포함)</dd>
+      <dt><kbd>Shift</kbd>+<kbd>Enter</kbd></dt><dd>내보내고 줄바꿈 (나간 조각에서는 줄바꿈 켜기/끄기)</dd>
+      <dt><kbd>Esc</kbd></dt><dd>버리기</dd>
+      <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>조각 이동</dd>
+      <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>대기 중 모두 내보내기</dd>
+      <dt><kbd>Insert</kbd></dt><dd>이 조각 뒤에 직접 입력</dd>
+    </dl>
+    <p class="hint note"><span class="sw"></span>보라색 조각은 강사 원어의 기계 번역 제안입니다. 확인해야 나갑니다.</p>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -151,6 +239,29 @@ let receivedAt = performance.now();
 let focusedId = null;
 let stickToBottom = true;
 const rows = new Map();  // id → { el, input, bar, meta }
+
+// 큐 목록 안의 "검토 대기" 구분선 (모두 내보내기 버튼 포함)
+{
+  const d = document.createElement("div");
+  d.id = "divider"; d.className = "divider";
+  d.innerHTML = '<span id="pendingCount">검토 대기</span><button id="btnAll" class="btn sm ghost" title="Ctrl+Enter">대기 중 모두 내보내기</button>';
+  $("list").append(d);
+}
+
+// 분할 선택(세그먼트): 숨은 select 가 값의 기준이고, 버튼은 그 값을 바꾸며 change 를 일으킨다.
+function syncSeg(selId) {
+  const sel = $(selId);
+  $(selId + "Seg").querySelectorAll("button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.v === sel.value));
+    b.disabled = sel.disabled;
+  });
+}
+for (const id of ["mode", "review"]) {
+  $(id + "Seg").querySelectorAll("button").forEach((b) => {
+    b.onclick = () => { if ($(id).disabled) return; $(id).value = b.dataset.v; $(id).dispatchEvent(new Event("change")); syncSeg(id); };
+  });
+  syncSeg(id);
+}
 
 // 연결 전·재연결 중에 누른 명령은 버리지 않고 연결되면 보낸다.
 const outbox = [];
@@ -171,7 +282,7 @@ function connect() {
     renderOther(msg.other || []);
     render();
   };
-  ws.onclose = () => { $("state").textContent = "연결 끊김, 재연결 중…"; setTimeout(connect, 1000); };
+  ws.onclose = () => { $("stateText").textContent = "연결 끊김, 재연결 중…"; setTimeout(connect, 1000); };
 }
 
 function fmtTime(sec) {
@@ -190,7 +301,7 @@ function parseOffset(text) {
 function renderTest() {
   const t = status.test || { status: "idle" };
   const el = $("testState");
-  el.className = `pill ${t.status}`;
+  el.className = `hint ${t.status}`;
   el.textContent = { idle: "", downloading: `받는 중… ${t.progress || 0}%`,
                      ready: `준비됨: ${t.title || ""} (${fmtTime(t.duration)})`, error: `실패: ${t.error || ""}` }[t.status] || "";
   $("btnTestLoad").disabled = t.status === "downloading";
@@ -210,31 +321,37 @@ function renderOther(lines) {
   box.hidden = status.mode !== "interpret" || !lines.length;
   if (box.hidden) return;
   const head = document.createElement("div");
-  head.innerHTML = '<b>강사 원어</b><span class="hint">통역이 빠졌으면 문장을 누르세요 → 번역 제안이 들어갑니다</span>';
+  head.className = "ohead";
+  head.innerHTML = '<b>강사 원어</b><span class="hint">통역이 빠졌으면 문장을 누르세요 → 번역 제안</span>';
   box.replaceChildren(head, ...lines.slice(-4).map((t, i, arr) => {
     const div = document.createElement("div");
+    div.className = "line";
     const span = document.createElement("span");
     span.className = "src";
     span.textContent = t;
     span.title = "이 문장의 번역 제안을 넣기";
     span.onclick = () => send({ cmd: "suggest", source: t, after: focusedId });
     div.append(span);
-    if (i === arr.length - 1) div.style.color = "var(--fg)";
+    if (i === arr.length - 1) div.style.color = "var(--text)";
     return div;
   }));
 }
 
 function renderHeader() {
   $("btnLive").textContent = status.live ? "자막 정지" : "자막 시작";
-  $("btnLive").className = status.live ? "danger" : "primary";
+  $("btnLive").className = `btn lg ${status.live ? "danger" : "primary"}`;
   // 무엇으로 인식 중인지 늘 보여 준다 (테스트 영상인 줄 알았는데 마이크로 도는 일이 없게)
-  $("state").textContent = status.live ? `● 인식 중 · ${status.live_test ? "테스트 영상" : "마이크"}${status.mode === "interpret" ? " · 순차통역" : ""}`
+  $("stateText").textContent = status.live ? `인식 중 · ${status.live_test ? "테스트 영상" : "마이크"}${status.mode === "interpret" ? " · 순차통역" : ""}`
                          : status.engine ? "대기" : "엔진 준비 중…";
-  $("state").className = status.live ? "pill on" : "pill";
+  $("state").className = status.live ? "chip live" : status.engine ? "chip" : "chip warn";
+  const nPending = items.filter((i) => i.status === "pending").length, nSent = items.filter((i) => i.status === "sent").length;
+  $("counts").innerHTML = `대기 <b>${nPending}</b> · 나감 <b>${nSent}</b>`;
+  $("pendingCount").textContent = nPending ? `검토 대기 ${nPending}` : "검토 대기";
   if (document.activeElement !== $("review")) $("review").value = status.review;
   if (document.activeElement !== $("mode")) $("mode").value = status.mode || "normal";
   $("otherWrap").hidden = $("mode").value !== "interpret";
   $("mode").disabled = $("otherLang").disabled = !!status.live;  // 방식은 시작 전에 정한다
+  syncSeg("mode"); syncSeg("review");
   if (document.activeElement !== $("countdown")) $("countdown").value = status.countdown;
   $("error").textContent = status.last_error || "";
   $("file").textContent = status.transcript ? `기록: ${status.transcript}` : "";
@@ -256,10 +373,19 @@ function makeRow(item) {
   brkmark.className = "brkmark";
   brkmark.title = "이 조각 뒤에서 자막 줄이 바뀝니다";
   const sendBtn = document.createElement("button");
+  sendBtn.className = "btn sm primary";
   sendBtn.textContent = "내보내기";
   const dropBtn = document.createElement("button");
+  dropBtn.className = "btn sm ghost";
   dropBtn.textContent = "버리기";
-  el.append(input, brkmark, bar, meta, sendBtn, dropBtn);
+  // 내보내기·버리기는 포커스된 줄이나 마우스를 올린 줄에만 보인다(CSS)
+  const acts = document.createElement("span");
+  acts.className = "acts";
+  acts.append(sendBtn, dropBtn);
+  const kbdhint = document.createElement("div");
+  kbdhint.className = "kbdhint";
+  kbdhint.innerHTML = "<kbd>Enter</kbd> 내보내기 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기";
+  el.append(input, brkmark, bar, meta, acts, kbdhint);
 
   let editing = false;
   input.addEventListener("focus", () => setFocus(item.id, false));
@@ -334,6 +460,11 @@ function render() {
     row.bar.parentElement.style.visibility = item.status === "pending" && item.remaining != null && !item.editing ? "visible" : "hidden";
   });
   for (const [id, row] of rows) if (!seen.has(id)) { row.el.remove(); rows.delete(id); }
+  // "검토 대기" 구분선: 첫 대기 조각 바로 앞에 둔다(없으면 맨 끝)
+  const firstPending = items.map((i) => rows.get(i.id)).find((r) => r && r.item.status === "pending");
+  const divider = $("divider");
+  if (firstPending) { if (divider.nextSibling !== firstPending.el) list.insertBefore(divider, firstPending.el); }
+  else if (divider.parentNode !== list || divider.nextSibling) list.append(divider);
   // 포커스 관리: 설정 칸 등 다른 곳을 만지는 중이면 건드리지 않는다.
   const active = document.activeElement;
   const nothingFocused = !active || active === document.body;
@@ -464,6 +595,24 @@ $("btnDisplay").onclick = () => fetch("/live/display-window", { method: "POST" }
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.target.classList?.contains("text")) { e.preventDefault(); sendAll(); }
 });
+
+// 설정 패널 열림/닫힘을 기억한다
+function setPanel(open) {
+  document.body.classList.toggle("panel-open", open);
+  $("btnSettings").setAttribute("aria-pressed", String(open));
+  try { localStorage.setItem("vk.operator.panel", open ? "1" : "0"); } catch (_) {}
+}
+$("btnSettings").onclick = () => setPanel(!document.body.classList.contains("panel-open"));
+try { setPanel(localStorage.getItem("vk.operator.panel") === "1"); } catch (_) {}
+
+// 단축키 도움말: Esc·바깥 클릭으로 닫는다 (Esc 가 조각 버리기로 새지 않게 capture 에서 먼저 가로챈다)
+function setHelp(open) { $("help").hidden = !open; }
+$("btnHelp").onclick = () => setHelp($("help").hidden);
+$("help").addEventListener("mousedown", (e) => { if (e.target === $("help")) setHelp(false); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("help").hidden) { e.preventDefault(); e.stopPropagation(); setHelp(false); }
+}, true);
+$("error").onclick = () => { $("error").textContent = ""; };
 
 loadSettings();
 connect();

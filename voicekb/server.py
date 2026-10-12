@@ -635,6 +635,7 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
     app.router.add_get("/engine", lambda r: web.FileResponse(web_dir / "engine.html"))
     app.router.add_get("/settings", lambda r: web.FileResponse(web_dir / "settings.html"))
     app.router.add_get("/operator", lambda r: web.FileResponse(web_dir / "operator.html"))
+    app.router.add_get("/ui.css", lambda r: web.FileResponse(web_dir / "ui.css"))
     app.router.add_get("/display", lambda r: web.FileResponse(web_dir / "display.html"))
     app.router.add_post("/live/toggle", toggle_handler)
     app.router.add_get("/live/test-audio", test_audio)

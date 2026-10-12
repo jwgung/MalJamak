@@ -1,0 +1,123 @@
+/* Voice Keyboard 공통 디자인: 설정 화면·교정 화면이 함께 쓴다.
+   색은 토큰으로만 쓰고, 밝은/어두운 테마를 모두 지원한다(시스템 설정을 따른다). */
+
+:root {
+  --font: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f8f9fb;
+  --line: #e4e7ec;
+  --line-strong: #cfd4dc;
+  --text: #15181e;
+  --text-2: #4a5161;
+  --text-3: #8a91a0;
+
+  --accent: #3b5bdb;
+  --accent-soft: #e8edff;
+  --accent-text: #ffffff;
+  --live: #e03131;
+  --live-soft: #ffe9e9;
+  --ok: #2b8a3e;
+  --ok-soft: #e6f6ea;
+  --warn: #c77700;
+  --warn-soft: #fff4e0;
+  --suggest: #7048e8;
+  --suggest-soft: #f1ecff;
+
+  --radius: 10px;
+  --radius-sm: 7px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.16);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115;
+    --surface: #171a20;
+    --surface-2: #1d2128;
+    --line: #2a2f38;
+    --line-strong: #3a404b;
+    --text: #e8eaee;
+    --text-2: #b4bac5;
+    --text-3: #7d8494;
+    --accent: #6b8cff;
+    --accent-soft: #1f2a4d;
+    --live: #ff6b6b;
+    --live-soft: #3a1d20;
+    --ok: #51cf66;
+    --ok-soft: #17301d;
+    --warn: #fcc419;
+    --warn-soft: #34290f;
+    --suggest: #b197fc;
+    --suggest-soft: #2a2245;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --surface: #171a20; --surface-2: #1d2128; --line: #2a2f38; --line-strong: #3a404b;
+  --text: #e8eaee; --text-2: #b4bac5; --text-3: #7d8494; --accent: #6b8cff; --accent-soft: #1f2a4d;
+  --live: #ff6b6b; --live-soft: #3a1d20; --ok: #51cf66; --ok-soft: #17301d; --warn: #fcc419; --warn-soft: #34290f;
+  --suggest: #b197fc; --suggest-soft: #2a2245;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+h1, h2, h3 { margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+a { color: var(--accent); }
+kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 5px; background: var(--surface); color: var(--text-2); }
+code { font: 12px var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--surface-2); border: 1px solid var(--line); }
+
+/* ── 버튼 ── */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 14px;
+       border-radius: var(--radius-sm); border: 1px solid var(--line-strong); background: var(--surface); color: var(--text);
+       font: 600 13px var(--font); cursor: pointer; white-space: nowrap; transition: background .12s, border-color .12s; }
+.btn:hover { background: var(--surface-2); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.danger { background: var(--live); border-color: var(--live); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
+.btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn.lg { height: 40px; padding: 0 18px; font-size: 14px; }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.btn.icon { width: 34px; padding: 0; }
+
+/* ── 입력 ── */
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field > span { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.field small, .hint { font-size: 12px; color: var(--text-3); line-height: 1.5; }
+input[type=text], input[type=password], input[type=number], select, textarea {
+  width: 100%; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--text); font: 14px var(--font); outline: none; transition: border-color .12s, box-shadow .12s; }
+textarea { height: auto; padding: 8px 10px; resize: vertical; line-height: 1.5; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+select option { background: var(--surface); color: var(--text); }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; cursor: pointer; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+/* ── 분할 선택(세그먼트) ── */
+.seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--line); }
+.seg button { height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: var(--text-2);
+              font: 600 13px var(--font); cursor: pointer; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.seg button:disabled { opacity: .5; cursor: default; }
+
+/* ── 칩(상태 표시) ── */
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px;
+        font-size: 12px; font-weight: 600; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--line); white-space: nowrap; }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+.chip.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; } .chip.ok .dot { background: var(--ok); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; } .chip.warn .dot { background: var(--warn); }
+.chip.bad, .chip.live { background: var(--live-soft); color: var(--live); border-color: transparent; } .chip.bad .dot, .chip.live .dot { background: var(--live); }
+.chip.live .dot { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* ── 카드 ── */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.section-title { font-size: 12px; font-weight: 700; color: var(--text-3); text-transform: none; letter-spacing: .02em; }
+
+/* 접근성: 키보드 포커스는 늘 보이게 */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

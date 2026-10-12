@@ -61,6 +61,23 @@ def _no_activate(root) -> None:
             pass
 
 
+# 자막 창 색: 완전한 검정보다 살짝 띄운 어두운 회색이 다른 창 위에서 덜 무겁다.
+BG = "#121418"
+FG = "#ffffff"
+FG_LIVE = "#b8bec9"  # 아직 말하는 중인 줄
+FG_SRC = "#8a919e"  # 번역 원문
+FG_HINT = "#fcc419"
+KOREAN_FONTS = ("Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR", "NanumGothic")
+
+
+def _pick_font(root) -> str:
+    """설치된 한글 글꼴 중 먼저 찾은 것. 없으면 시스템 기본."""
+    from tkinter import font as tkfont
+
+    families = set(tkfont.families(root))
+    return next((f for f in KOREAN_FONTS if f in families), "")
+
+
 def run_overlay(port: int, parent_pid: int | None = None) -> None:
     import tkinter as tk
 
@@ -72,7 +89,8 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.attributes("-alpha", 0.85)
-    root.configure(bg="black")
+    root.configure(bg=BG)
+    family = _pick_font(root)
 
     width = int(root.winfo_screenwidth() * 0.6)
     pos = {"x": (root.winfo_screenwidth() - width) // 2, "y": int(root.winfo_screenheight() * 0.78)}
@@ -80,17 +98,20 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
 
     # history: 받은 자막 줄을 id 순서로 모두 기억한다 (서버는 최근 몇 줄만 보내므로). scroll: 위로 올려 본 줄 수.
     state = {"show_src": True, "font_size": 26, "live": None, "history": {}, "scroll": 0}
-    frame = tk.Frame(root, bg="black", padx=16, pady=10)
+    frame = tk.Frame(root, bg=BG, padx=24, pady=14)
     frame.pack(fill="both", expand=True)
 
     # 줄마다 원문·번역 라벨을 한 번만 만들고 글자만 바꾼다 (깜빡임 방지).
     rows = []
     for _ in range(ROWS):
-        src = tk.Label(frame, fg="#9a9a9a", bg="black", wraplength=width - 32, justify="center")
-        ko = tk.Label(frame, bg="black", wraplength=width - 32, justify="center")
+        src = tk.Label(frame, fg=FG_SRC, bg=BG, wraplength=width - 48, justify="center")
+        ko = tk.Label(frame, bg=BG, wraplength=width - 48, justify="center")
         rows.append((src, ko))
 
-    hint = tk.Label(frame, fg="#facc15", bg="black", font=("", 11))
+    hint = tk.Label(frame, fg=FG_HINT, bg=BG, font=(family, 11))
+    # 마우스를 올렸을 때만 보이는 사용법 (평소엔 자막만)
+    tip = tk.Label(frame, fg=FG_SRC, bg=BG, font=(family, 10),
+                   text="드래그: 옮기기 · 휠: 지난 자막 · 더블클릭: 원문 표시")
 
     def render() -> None:
         history = list(state["history"].values())
@@ -107,6 +128,9 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
             items = [{"src": "", "ko": "자막 대기 중…", "live": True}]
         items = items[-ROWS:]
         hint.pack_forget()
+        tip.pack_forget()
+        if state.get("hover"):
+            tip.pack(fill="x", pady=(0, 4))
         if scroll:
             hint.config(text=f"▲ 지난 자막 보는 중 ({scroll}줄 전) — 휠을 내리면 최신으로")
             hint.pack(fill="x")
@@ -119,10 +143,10 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
             item = items[i]
             # 번역이 없으면 원문과 자막이 같으니 한 번만 보여준다.
             if state["show_src"] and item.get("src") and item.get("src") != item.get("ko"):
-                src.config(text=item["src"], font=("", max(size // 2, 11)))
+                src.config(text=item["src"], font=(family, max(size // 2, 11)))
                 src.pack(fill="x")
-            ko.config(text=item.get("ko") or item.get("src") or "…", font=("", size, "bold"),
-                      fg="#bbbbbb" if item.get("live") else "white")
+            ko.config(text=item.get("ko") or item.get("src") or "…", font=(family, size, "bold"),
+                      fg=FG_LIVE if item.get("live") else FG)
             ko.pack(fill="x")
         root.update_idletasks()
         root.geometry(f"{width}x{frame.winfo_reqheight()}+{pos['x']}+{pos['y']}")
@@ -162,6 +186,10 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
         state["show_src"] = not state["show_src"]
         render()
 
+    def on_hover(on: bool):
+        state["hover"] = on
+        render()
+
     def on_wheel(e):
         up = getattr(e, "delta", 0) > 0 or getattr(e, "num", 0) == 4
         state["scroll"] = max(0, state["scroll"] + (1 if up else -1))
@@ -170,6 +198,9 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
     root.bind_all("<ButtonPress-1>", on_press)
     root.bind_all("<B1-Motion>", on_drag)
     root.bind_all("<Double-Button-1>", on_double)
+    # 창 안의 글자 위를 지날 때마다 들어옴/나감이 반복되지 않게, 창 자체의 이벤트만 쓴다
+    root.bind("<Enter>", lambda e: e.widget is root and on_hover(True))
+    root.bind("<Leave>", lambda e: e.widget is root and on_hover(False))
     root.bind_all("<MouseWheel>", on_wheel)  # Windows·macOS
     root.bind_all("<Button-4>", on_wheel)  # Linux 휠 위
     root.bind_all("<Button-5>", on_wheel)  # Linux 휠 아래

@@ -4,152 +4,220 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Voice Keyboard 설정</title>
+<link rel="stylesheet" href="/ui.css">
 <style>
-  :root { --bg: #f7f7f8; --card: #fff; --fg: #111; --muted: #6b7280; --border: #e5e7eb; --accent: #2563eb;
-          --ok: #16a34a; --warn: #d97706; --bad: #dc2626; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #111214; --card: #1b1c1f; --fg: #eee; --muted: #9ca3af; --border: #2c2d31; }
+  /* 공통 색·버튼·입력은 ui.css 를 쓰고, 여기는 이 화면의 배치만 정한다. */
+  body { padding: 24px 16px 96px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+
+  /* 머리글: 이름 + 상태 칩 + 빠른 실행 */
+  .head { padding: 18px 20px; margin-bottom: 16px; }
+  .head h1 { font-size: 20px; margin-bottom: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip em { font-style: normal; font-weight: 500; opacity: .75; }
+  .chip.bad.idle { background: var(--surface-2); color: var(--text-2); border-color: var(--line); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .actions [hidden] { display: none; }
+  #error { margin-top: 12px; padding: 9px 12px; border-radius: var(--radius-sm); background: var(--live-soft); color: var(--live);
+           font-size: 13px; }
+  #error:empty { display: none; }
+
+  /* 탐색 + 본문 */
+  .layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: start; }
+  .tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 16px; }
+  .tabs button { text-align: left; height: 38px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: transparent;
+                 color: var(--text-2); font: 600 14px var(--font); cursor: pointer; white-space: nowrap; }
+  .tabs button:hover { background: var(--surface-2); color: var(--text); }
+  .tabs button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+
+  .pane { padding: 22px 24px; }
+  .pane[hidden] { display: none; }
+  .pane h2 { font-size: 16px; }
+  .pane > .lead { margin: 4px 0 20px; color: var(--text-3); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; }
+  .grid .full { grid-column: 1 / -1; }
+  .stack { display: flex; flex-direction: column; gap: 18px; }
+  .sub { margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--text-2); }
+  .tips { margin: 20px 0 0; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); border: 1px solid var(--line);
+          display: flex; flex-direction: column; gap: 6px; }
+  .tips p { margin: 0; }
+  .row-btn { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+  /* 저장 막대 (바뀐 게 있을 때만) */
+  .savebar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; padding: 12px 16px; background: var(--surface);
+             border-top: 1px solid var(--line-strong); box-shadow: var(--shadow-lg); }
+  .savebar[hidden] { display: none; }
+  .savebar > div { max-width: 1040px; margin: 0 auto; display: flex; align-items: center; gap: 8px; }
+  .savebar .msg { flex: 1; font-weight: 600; font-size: 13px; }
+  #saved { position: fixed; right: 16px; bottom: 16px; z-index: 11; padding: 8px 14px; border-radius: 999px; font-weight: 600; font-size: 13px;
+           background: var(--ok-soft); color: var(--ok); box-shadow: var(--shadow-lg); }
+  #saved:empty { display: none; }
+
+  @media (max-width: 760px) {
+    body { padding: 12px 12px 96px; }
+    .layout { grid-template-columns: 1fr; gap: 12px; }
+    .tabs { flex-direction: row; overflow-x: auto; position: static; gap: 4px; padding-bottom: 2px;
+            border-bottom: 1px solid var(--line); }
+    .tabs button { flex: none; border-radius: 8px 8px 0 0; }
+    .pane { padding: 18px 16px; }
+    .grid { grid-template-columns: 1fr; }
+    .head { padding: 16px; }
+    .savebar .msg { font-size: 12px; }
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 24px 16px 48px; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-  main { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 20px; margin: 0 0 16px; }
-  section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
-  h2 { font-size: 14px; margin: 0 0 12px; }
-  label.row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: center; margin: 8px 0; }
-  label.row > span { color: var(--muted); }
-  input[type=text], input[type=password], input[type=number], select {
-    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
-  select option { background: var(--card); }
-  .check { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
-  code { font-size: 12px; background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
-  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
-  .pill { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
-  .pill b { display: block; font-size: 12px; color: var(--muted); font-weight: 500; }
-  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
-  .buttons { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; font: inherit; cursor: pointer; }
-  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  #error { margin-top: 10px; }
-  #saved { color: var(--ok); margin-left: 8px; }
-  @media (max-width: 480px) { label.row { grid-template-columns: 1fr; gap: 4px; } }
 </style>
 </head>
 <body>
-<main>
-  <h1>Voice Keyboard</h1>
-
-  <section>
-    <h2>상태</h2>
-    <div class="status">
-      <div class="pill"><b>엔진 (Chrome)</b><span id="sEngine">…</span></div>
-      <div class="pill"><b>음성 입력</b><span id="sInput">…</span></div>
-      <div class="pill"><b>자막</b><span id="sCaptions">…</span></div>
-      <div class="pill"><b>내장 번역</b><span id="sBuiltin">…</span></div>
-      <div class="pill"><b>Groq</b><span id="sGroq">…</span></div>
-      <div class="pill"><b>붙여넣기</b><span id="sPaste">…</span></div>
-      <div class="pill"><b>오프라인 인식</b><span id="sLocal">…</span></div>
+<div class="wrap">
+  <header class="card head">
+    <h1>Voice Keyboard</h1>
+    <div class="chips">
+      <span class="chip warn"><i class="dot"></i><em>엔진</em><span id="sEngine">…</span></span>
+      <span class="chip"><i class="dot"></i><em>음성 입력</em><span id="sInput">…</span></span>
+      <span class="chip"><i class="dot"></i><em>PC 소리 자막</em><span id="sCaptions">…</span></span>
+      <span class="chip"><i class="dot"></i><em>내장 번역</em><span id="sBuiltin">…</span></span>
+      <span class="chip"><i class="dot"></i><em>Groq</em><span id="sGroq">…</span></span>
+      <span class="chip"><i class="dot"></i><em>붙여넣기</em><span id="sPaste">…</span></span>
+      <span class="chip"><i class="dot"></i><em>오프라인 인식</em><span id="sLocal">…</span></span>
     </div>
-    <div id="error" class="hint bad"></div>
-    <div class="buttons">
-      <button id="btnInput">음성 입력 시작</button>
-      <button id="btnCaptions">PC 소리 자막 켜기</button>
-      <button id="btnOperator" onclick="window.open('/operator', '_blank')">현장 자막 (교정 화면)</button>
-      <button id="btnTranslator" hidden>번역 모델 받기</button>
+    <div class="actions">
+      <button type="button" class="btn primary" id="btnInput">음성 입력 시작</button>
+      <button type="button" class="btn" id="btnCaptions">PC 소리 자막 켜기</button>
+      <button type="button" class="btn" id="btnOperator" onclick="window.open('/operator', '_blank')">현장 자막 (교정 화면)</button>
+      <button type="button" class="btn" id="btnTranslator" hidden>번역 모델 받기</button>
     </div>
-  </section>
+    <div id="error" role="alert"></div>
+  </header>
 
-  <form id="form">
-    <section>
-      <h2>음성 입력 — 포커스된 입력창에 붙여넣기</h2>
-      <label class="row"><span>단축키</span><input type="text" name="input.hotkey" placeholder="<ctrl>+<alt>+<space>"></label>
-      <label class="row"><span>방식</span>
-        <select name="input.mode">
-          <option value="toggle">누를 때마다 시작/정지</option>
-          <option value="hold">누르고 있는 동안만 듣기</option>
-        </select></label>
-      <label class="row"><span>언어</span>
-        <select name="input.lang">
-          <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option>
-        </select></label>
-      <label class="row"><span>인식 방식</span>
-        <select name="input.engine">
-          <option value="cloud">온라인 — 구글 서버 (정확)</option>
-          <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
-        </select></label>
-      <label class="row"><span>마이크</span><select name="input.mic"><option value="">기본 마이크</option></select></label>
-      <label class="row"><span>문장 사이</span>
-        <select name="input.separator"><option value=" ">공백 한 칸</option><option value="">붙여 쓰기</option></select></label>
-      <label class="check"><input type="checkbox" name="input.groq_correct"> Groq 로 교정 (한영 혼용·띄어쓰기·군말)</label>
-      <label class="row"><span>교정 강도</span>
-        <select name="input.correction">
-          <option value="aggressive">적극적 — 발음이 비슷한 단어까지 문맥으로 고침</option>
-          <option value="conservative">보수적 — 띄어쓰기·명백한 오류만</option>
-        </select></label>
-      <p class="hint">단축키 형식 예: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code>.
-        전역 단축키를 못 쓰는 환경(Linux Wayland)은 OS 단축키에 <code>curl -s -X POST http://localhost:<span class="port"></span>/toggle</code> 를 등록하세요.</p>
-    </section>
+  <div class="layout">
+    <nav class="tabs" role="tablist" aria-label="설정 구역">
+      <button type="button" role="tab" data-tab="input">음성 입력</button>
+      <button type="button" role="tab" data-tab="captions">PC 소리 자막</button>
+      <button type="button" role="tab" data-tab="glossary">단어장</button>
+      <button type="button" role="tab" data-tab="groq">Groq</button>
+      <button type="button" role="tab" data-tab="general">일반</button>
+    </nav>
 
-    <section>
-      <h2>PC 소리 자막 — 회의·강의·통화 소리를 내 화면 위 자막으로</h2>
-      <label class="row"><span>말하는 언어</span>
-        <select name="captions.lang">
-          <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
-        </select></label>
-      <label class="row"><span>번역</span>
-        <select name="captions.translate">
-          <option value="false">번역 안 함 — 들리는 말 그대로</option>
-          <option value="true">한국어로 번역 (외국어일 때)</option>
-        </select></label>
-      <label class="row"><span>인식 방식</span>
-        <select name="captions.engine">
-          <option value="cloud">온라인 — 구글 서버 (정확)</option>
-          <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
-        </select></label>
-      <label class="row"><span>소리 출처</span><select name="captions.source"><option value="loopback">PC 소리 (기본 스피커 출력)</option></select></label>
-      <label class="row"><span>번역 엔진 (번역할 때)</span>
-        <select name="captions.translator">
-          <option value="auto">자동 (내장 번역 → 안 되면 Groq)</option>
-          <option value="builtin">Chrome 내장 번역만</option>
-          <option value="groq">Groq 만</option>
-        </select></label>
-      <label class="row"><span>글자 크기</span><input type="number" name="captions.font_size" min="12" max="64"></label>
-      <label class="row"><span>투명도</span><input type="number" name="captions.opacity" min="0.3" max="1" step="0.05"></label>
-      <p class="hint">Zoom·화상회의·온라인 강의 소리를 화면 위 자막 창에 바로 띄웁니다. 내 목소리는 빼고 상대방 말만 나옵니다.
-        자막 창은 드래그로 옮기고, <b>마우스 휠로 지난 자막</b>을 다시 보며, 더블클릭으로 원문 표시를 켜고 끕니다.
-        자막은 설정 폴더의 transcripts 에 "PC자막_날짜.txt"로 저장됩니다.
-        macOS 는 PC 소리를 직접 받을 수 없어 BlackHole 같은 가상 장치를 소리 출처로 고릅니다.</p>
-    </section>
+    <form id="form">
+      <section class="card pane" data-pane="input">
+        <h2>음성 입력</h2>
+        <p class="lead">말한 내용을 지금 포커스된 입력창에 붙여넣습니다.</p>
+        <div class="grid">
+          <label class="field"><span>단축키</span>
+            <input type="text" name="input.hotkey" placeholder="<ctrl>+<alt>+<space>">
+            <small>예: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code></small></label>
+          <label class="field"><span>방식</span>
+            <select name="input.mode">
+              <option value="toggle">누를 때마다 시작/정지</option>
+              <option value="hold">누르고 있는 동안만 듣기</option>
+            </select></label>
+          <label class="field"><span>언어</span>
+            <select name="input.lang">
+              <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option>
+            </select></label>
+          <label class="field"><span>인식 방식</span>
+            <select name="input.engine">
+              <option value="cloud">온라인 — 구글 서버 (정확)</option>
+              <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
+            </select></label>
+          <label class="field"><span>마이크</span>
+            <select name="input.mic"><option value="">기본 마이크</option></select></label>
+          <label class="field"><span>문장 사이</span>
+            <select name="input.separator"><option value=" ">공백 한 칸</option><option value="">붙여 쓰기</option></select></label>
+        </div>
+        <div class="sub">Groq 교정</div>
+        <div class="grid">
+          <div class="field"><label class="check"><input type="checkbox" name="input.groq_correct"> Groq 로 교정</label>
+            <small>한영 혼용·띄어쓰기·군말을 다듬습니다. Groq 키가 필요합니다.</small></div>
+          <label class="field"><span>교정 강도</span>
+            <select name="input.correction">
+              <option value="aggressive">적극적 — 발음이 비슷한 단어까지 문맥으로 고침</option>
+              <option value="conservative">보수적 — 띄어쓰기·명백한 오류만</option>
+            </select></label>
+        </div>
+        <div class="tips">
+          <p class="hint">전역 단축키를 못 쓰는 환경(Linux Wayland)은 OS 단축키에
+            <code>curl -s -X POST http://localhost:<span class="port"></span>/toggle</code> 를 등록하세요.</p>
+        </div>
+      </section>
 
-    <section>
-      <h2>단어장</h2>
-      <textarea name="glossary" rows="3" style="width:100%; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:transparent; color:inherit; font:inherit"
-        placeholder="Groq, GitHub, 사람 이름, 회사 용어 …"></textarea>
-      <p class="hint">자주 쓰는 고유명사·용어를 쉼표나 줄바꿈으로 적으세요. Groq 교정·번역이 비슷하게 들린 말을 이 표기로 고칩니다
-        (예: "크로키는", "그룹" → Groq). Groq 키가 있을 때만 동작합니다.</p>
-    </section>
+      <section class="card pane" data-pane="captions" hidden>
+        <h2>PC 소리 자막</h2>
+        <p class="lead">회의·강의·통화 소리를 내 화면 위 자막으로 띄웁니다. 내 목소리는 빼고 상대방 말만 나옵니다.</p>
+        <div class="grid">
+          <label class="field"><span>말하는 언어</span>
+            <select name="captions.lang">
+              <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
+            </select></label>
+          <label class="field"><span>인식 방식</span>
+            <select name="captions.engine">
+              <option value="cloud">온라인 — 구글 서버 (정확)</option>
+              <option value="local">오프라인 — 기기 내 (인터넷 불필요, 덜 정확)</option>
+            </select></label>
+          <label class="field"><span>번역</span>
+            <select name="captions.translate">
+              <option value="false">번역 안 함 — 들리는 말 그대로</option>
+              <option value="true">한국어로 번역 (외국어일 때)</option>
+            </select></label>
+          <label class="field"><span>번역 엔진 (번역할 때)</span>
+            <select name="captions.translator">
+              <option value="auto">자동 (내장 번역 → 안 되면 Groq)</option>
+              <option value="builtin">Chrome 내장 번역만</option>
+              <option value="groq">Groq 만</option>
+            </select></label>
+          <label class="field full"><span>소리 출처</span>
+            <select name="captions.source"><option value="loopback">PC 소리 (기본 스피커 출력)</option></select>
+            <small>macOS 는 PC 소리를 직접 받을 수 없어 BlackHole 같은 가상 장치를 소리 출처로 고릅니다.</small></label>
+          <label class="field"><span>글자 크기</span><input type="number" name="captions.font_size" min="12" max="64"></label>
+          <label class="field"><span>투명도</span><input type="number" name="captions.opacity" min="0.3" max="1" step="0.05"></label>
+        </div>
+        <div class="tips">
+          <p class="hint">자막 창: 드래그로 옮기고, <b>마우스 휠로 지난 자막</b>을 다시 보며, 더블클릭으로 원문 표시를 켜고 끕니다.</p>
+          <p class="hint">자막은 설정 폴더의 transcripts 에 "PC자막_날짜.txt"로 저장됩니다.</p>
+        </div>
+      </section>
 
-    <section>
-      <h2>Groq (선택)</h2>
-      <label class="row"><span>API 키</span><input type="password" name="groq.api_key" autocomplete="off"></label>
-      <label class="row"><span>모델</span>
-        <select name="groq.model">
-          <option value="openai/gpt-oss-120b">GPT-OSS 120B (추천)</option>
-          <option value="openai/gpt-oss-20b">GPT-OSS 20B (조금 더 빠름)</option>
-        </select></label>
-      <p class="hint" id="keyHint"></p>
-      <div class="buttons"><button type="button" id="btnClearKey">키 삭제</button></div>
-    </section>
+      <section class="card pane" data-pane="glossary" hidden>
+        <h2>단어장</h2>
+        <p class="lead">자주 쓰는 고유명사·용어를 적어 두면 교정·번역이 이 표기로 맞춥니다.</p>
+        <label class="field"><span>용어 목록</span>
+          <textarea name="glossary" rows="5" placeholder="Groq, GitHub, 사람 이름, 회사 용어 …"></textarea>
+          <small>쉼표나 줄바꿈으로 구분합니다. 비슷하게 들린 말을 이 표기로 고칩니다 (예: "크로키는", "그룹" → Groq).
+            Groq 키가 있을 때만 동작합니다.</small></label>
+      </section>
 
-    <section>
-      <h2>일반</h2>
-      <label class="check"><input type="checkbox" name="autostart"> 로그인할 때 자동 실행</label>
-    </section>
+      <section class="card pane" data-pane="groq" hidden>
+        <h2>Groq</h2>
+        <p class="lead">선택 사항입니다. 키가 있으면 교정과 번역 품질이 올라갑니다.</p>
+        <div class="stack">
+          <label class="field"><span>API 키</span>
+            <input type="password" name="groq.api_key" autocomplete="off">
+            <small id="keyHint"></small></label>
+          <div class="row-btn"><button type="button" class="btn sm" id="btnClearKey">키 삭제</button></div>
+          <label class="field"><span>모델</span>
+            <select name="groq.model">
+              <option value="openai/gpt-oss-120b">GPT-OSS 120B (추천)</option>
+              <option value="openai/gpt-oss-20b">GPT-OSS 20B (조금 더 빠름)</option>
+            </select></label>
+        </div>
+      </section>
 
-    <button class="primary" type="submit">저장</button><span id="saved"></span>
-  </form>
-</main>
+      <section class="card pane" data-pane="general" hidden>
+        <h2>일반</h2>
+        <p class="lead">앱 전체에 적용되는 설정입니다.</p>
+        <label class="check"><input type="checkbox" name="autostart"> 로그인할 때 자동 실행</label>
+      </section>
+
+      <div class="savebar" id="savebar" hidden>
+        <div>
+          <span class="msg">변경사항이 있습니다</span>
+          <button type="button" class="btn ghost" id="btnCancel">취소</button>
+          <button type="submit" class="btn primary">저장</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+<span id="saved" role="status"></span>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -183,9 +251,13 @@ function fill(settings) {
 }
 
 function showStatus(s) {
-  const set = (id, text, cls) => { const el = $(id); el.textContent = text; el.className = cls || ""; };
+  // 값 span 에 글자와 ok/warn/bad 를 넣고, 감싼 칩에도 같은 색 클래스를 준다.
+  const set = (id, text, cls) => {
+    const el = $(id); el.textContent = text; el.className = cls || "";
+    el.parentElement.className = "chip" + (cls ? " " + cls : "");
+  };
   set("#sEngine", s.engine ? "준비됨" : "시작 중…", s.engine ? "ok" : "warn");
-  set("#sInput", s.listening ? "듣는 중" : "대기", s.listening ? "bad" : "");
+  set("#sInput", s.listening ? "듣는 중" : "대기", s.listening ? "live" : "");
   set("#sCaptions", s.captions ? "켜짐" : "꺼짐", s.captions ? "ok" : "");
   const builtin = { available: ["사용 가능", "ok"], downloadable: ["모델 받기 필요", "warn"],
                     downloading: ["받는 중", "warn"], unavailable: ["지원 안 함", "bad"],
@@ -218,12 +290,39 @@ async function loadSources() {
   } catch (_) { /* 엔진이 아직 없으면 다음에 */ }
 }
 
+// ── 탭: 한 번에 한 구역만 보이고, 고른 탭은 기억한다 ──
+const TABS = ["input", "captions", "glossary", "groq", "general"];
+function selectTab(name, remember = true) {
+  if (!TABS.includes(name)) name = "input";
+  document.querySelectorAll(".tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+  document.querySelectorAll(".pane").forEach((p) => (p.hidden = p.dataset.pane !== name));
+  if (!remember) return;
+  try { localStorage.setItem("vk.settings.tab", name); } catch (_) {}
+  try { history.replaceState(null, "", "#" + name); } catch (_) {}
+}
+document.querySelectorAll(".tabs button").forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
+(function initTab() {
+  let name = location.hash.slice(1);
+  if (!TABS.includes(name)) { try { name = localStorage.getItem("vk.settings.tab"); } catch (_) {} }
+  selectTab(name, false);
+})();
+
+// ── 변경 감지: 불러온/저장한 값과 달라지면 저장 막대를 보인다 ──
+const snapshot = () => JSON.stringify(fields.map((el) => (el.type === "checkbox" ? el.checked : el.value)));
+let baseline = "";
+function checkDirty() { $("#savebar").hidden = snapshot() === baseline; }
+function markClean() { baseline = snapshot(); checkDirty(); }
+$("#form").addEventListener("input", checkDirty);
+$("#form").addEventListener("change", checkDirty);
+$("#btnCancel").onclick = () => load();
+
 async function load() {
   const { settings, status } = await (await fetch("/api/settings")).json();
   fill(settings);
   showStatus(status);
   await loadSources();
   fill(settings);
+  markClean();
 }
 
 $("#form").onsubmit = async (e) => {
@@ -239,7 +338,7 @@ $("#form").onsubmit = async (e) => {
   const res = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
                                              body: JSON.stringify(patch) });
   const { settings, status } = await res.json();
-  fill(settings); showStatus(status);
+  fill(settings); showStatus(status); markClean();
   $("#saved").textContent = "저장됨"; setTimeout(() => ($("#saved").textContent = ""), 2000);
 };
 

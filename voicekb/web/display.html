@@ -5,32 +5,47 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>자막</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #000; color: #fff; cursor: none; overflow: hidden; }
-  body { display: flex; flex-direction: column; justify-content: flex-end; padding: 3vh 4vw; box-sizing: border-box;
-         font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
+  body { display: flex; flex-direction: column; justify-content: flex-end; padding: 4vh 5vw; box-sizing: border-box;
+         font-family: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif; cursor: none; }
+  body.pointer { cursor: default; }
   #box { overflow: hidden; }
-  #text { font-weight: 700; word-break: keep-all; overflow-wrap: anywhere; }
-  #text span { transition: color 0.4s; }
-  #hint { position: fixed; top: 12px; left: 16px; font-size: 14px; color: #555; font-family: system-ui, sans-serif; }
+  #text { font-weight: 700; letter-spacing: -0.01em; word-break: keep-all; overflow-wrap: anywhere;
+          text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); }
+  /* 지난 줄은 살짝 흐리게, 지금 말하는 줄은 가장 밝게 — 어디를 읽어야 할지 바로 보이게 */
+  #text > div { color: #c9c9c9; transition: color 0.5s; }
+  #text > div.current { color: #ffffff; }
+  #text span.new { animation: appear 0.35s ease-out; }
+  @keyframes appear { from { opacity: 0; } to { opacity: 1; } }
+
+  #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 999px;
+          background: rgba(255, 255, 255, 0.08); color: #9a9a9a; font: 14px system-ui, sans-serif; transition: opacity 0.6s; }
+  #hint.hidden { opacity: 0; pointer-events: none; }
+  #conn { position: fixed; right: 16px; bottom: 12px; font: 12px system-ui, sans-serif; color: #ff8787; opacity: 0; transition: opacity 0.4s; }
+  #conn.show { opacity: 0.8; }
 </style>
 </head>
 <body>
 <div id="hint">이 창을 프로젝터 화면으로 옮긴 뒤 더블클릭하면 전체 화면이 됩니다</div>
+<div id="conn">● 연결 끊김 — 다시 연결하는 중</div>
 <div id="box"><div id="text"></div></div>
 <script>
 // 조작자가 내보낸 조각만 이어서 보여준다. 고친 조각은 그 자리에서 조용히 바뀐다.
 const text = document.getElementById("text");
 const box = document.getElementById("box");
+const hint = document.getElementById("hint");
 let style = { font_size: 56, lines: 3 };
+const shown = new Set();  // 이미 보여 준 조각 id — 새로 들어온 조각만 살짝 나타나게 한다
 
 // 줄바꿈: 조작자가 Shift+Enter 로 표시한 조각 뒤, 조작자가 찍은 문장부호 뒤, (켜져 있으면) 자동 줄바꿈 지점.
 // 한 문장이 길면 그 안에서만 화면 폭에 맞춰 넘어간다.
 const SENTENCE_END = /[.?!。？！…]$/;
 
 function render(items) {
+  const lineHeight = 1.5;
   text.style.fontSize = `${style.font_size}px`;
-  text.style.lineHeight = "1.45";
-  box.style.maxHeight = `${style.font_size * 1.45 * style.lines}px`;
+  text.style.lineHeight = String(lineHeight);
+  box.style.maxHeight = `${style.font_size * lineHeight * style.lines}px`;
   const lines = [];
   let prev = null;
   for (const item of items) {
@@ -38,12 +53,14 @@ function render(items) {
     lines[lines.length - 1].push(item);
     prev = item;
   }
-  text.replaceChildren(...lines.map((line) => {
+  text.replaceChildren(...lines.map((line, index) => {
     const div = document.createElement("div");
+    if (index === lines.length - 1) div.className = "current";
     line.forEach((item, i) => {
       if (i) div.append(" ");
       const span = document.createElement("span");
       span.textContent = item.text;
+      if (!shown.has(item.id)) { span.className = "new"; shown.add(item.id); }
       div.append(span);
     });
     return div;
@@ -54,22 +71,34 @@ function render(items) {
 
 function connect() {
   const ws = new WebSocket(`ws://${location.host}/ws?role=display`);
+  ws.onopen = () => document.getElementById("conn").classList.remove("show");
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type !== "display") return;
     style = msg.style || style;
     render(msg.items);
   };
-  ws.onclose = () => setTimeout(connect, 1000);
+  ws.onclose = () => { document.getElementById("conn").classList.add("show"); setTimeout(connect, 1000); };
 }
 
+// 안내 문구는 처음 몇 초만 보이고, 전체 화면이 아닐 때 마우스를 움직이면 잠깐 다시 보인다.
+let hintTimer = null;
+function showHint(ms) {
+  if (document.fullscreenElement) return;
+  hint.classList.remove("hidden");
+  document.body.classList.add("pointer");
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => { hint.classList.add("hidden"); document.body.classList.remove("pointer"); }, ms);
+}
+document.addEventListener("mousemove", () => showHint(2500));
 document.addEventListener("dblclick", () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else document.documentElement.requestFullscreen().catch(() => {});
 });
 document.addEventListener("fullscreenchange", () => {
-  document.getElementById("hint").style.display = document.fullscreenElement ? "none" : "";
+  if (document.fullscreenElement) { hint.classList.add("hidden"); document.body.classList.remove("pointer"); }
 });
+showHint(6000);
 connect();
 </script>
 </body>
