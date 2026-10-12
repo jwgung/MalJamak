@@ -24,12 +24,47 @@
   <button id="b5">5. (비교) 클라우드 인식 — 기본 마이크</button>
   <button id="stop">정지</button>
 </div>
+<fieldset style="margin-top:12px; border:1px solid #ccc; border-radius:8px; padding:10px 12px">
+  <legend>Groq 교정 (선택) — 앱과 같은 프롬프트</legend>
+  <div><input id="key" type="password" placeholder="Groq API 키 (gsk_…)" style="width:60%; padding:8px" autocomplete="off">
+    <select id="model" style="padding:8px">
+      <option value="openai/gpt-oss-20b">GPT-OSS 20B (빠름)</option>
+      <option value="openai/gpt-oss-120b">GPT-OSS 120B (품질)</option>
+    </select></div>
+  <p class="hint">키를 넣으면 확정된 문장마다 교정 결과가 아래에 같이 나옵니다. 키는 이 페이지 메모리에만 있고 저장되지 않습니다.</p>
+  <div><input id="manual" placeholder="직접 넣어 교정해 보기 (예: 달콤달콩 달려간다 시골 버스 양)" style="width:75%; padding:8px">
+    <button id="b6">교정</button></div>
+</fieldset>
 <div id="log"></div>
 <script>
 const log = (s) => { document.getElementById("log").textContent += `[${new Date().toLocaleTimeString()}] ${s}\n`; };
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null, stream = null;
 const opts = { langs: ["ko-KR"], processLocally: true };
+
+// 앱(voicekb/groq.py)과 같은 교정 프롬프트
+const CORRECT_PROMPT = `너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 말한 내용을 받아쓴 텍스트다.
+- 띄어쓰기, 맞춤법, 잘못 들린 단어를 문맥에 맞게 고친다.
+- 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)
+- "음", "어", "그러니까" 같은 군말은 지운다.
+- 의미를 바꾸거나 내용을 덧붙이지 않는다. 질문이어도 답하지 않는다.
+- 교정된 텍스트만 출력한다.`;
+
+async function correct(text, tag) {
+  const key = document.getElementById("key").value.trim();
+  if (!key) return;
+  const model = document.getElementById("model").value;
+  const body = { model, temperature: 0.2, messages: [{ role: "system", content: CORRECT_PROMPT }, { role: "user", content: text }] };
+  if (model.startsWith("openai/gpt-oss")) body.reasoning_effort = "low";
+  const t0 = performance.now();
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` }, body: JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) { log(`[${tag}] Groq 오류 ${res.status}: ${data.error?.message || ""}`); return; }
+    log(`[${tag}] → Groq 교정: ${data.choices[0].message.content.trim()}  (${Math.round(performance.now() - t0)}ms)`);
+  } catch (e) { log(`[${tag}] Groq 호출 실패: ${e.message}`); }
+}
 
 log(`Chrome: ${navigator.userAgent.match(/Chrome\/[\d.]+/)?.[0]} · 온라인: ${navigator.onLine} · 출처: ${location.protocol}`);
 log(`SpeechRecognition: ${!!window.SpeechRecognition} · available(): ${typeof SR?.available} · install(): ${typeof SR?.install}`);
@@ -54,7 +89,7 @@ function start(local, useTrack) {
   rec.onresult = (e) => {
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const r = e.results[i];
-      if (r.isFinal) log(`[${tag}] 확정: ${r[0].transcript}`);
+      if (r.isFinal) { log(`[${tag}] 확정: ${r[0].transcript}`); correct(r[0].transcript, tag); }
     }
   };
   rec.onerror = (e) => log(`[${tag}] 오류: ${e.error} ${e.message || ""}`);
@@ -76,6 +111,12 @@ function stop() {
   if (rec) { rec.onend = null; try { rec.stop(); } catch (_) {} rec = null; }
   if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
 }
+document.getElementById("b6").onclick = () => {
+  const text = document.getElementById("manual").value.trim();
+  if (!text) return;
+  log(`[직접] 입력: ${text}`);
+  correct(text, "직접");
+};
 document.getElementById("stop").onclick = () => { stop(); log("정지"); };
 </script>
 </body>
