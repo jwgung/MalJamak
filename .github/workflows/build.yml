@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install -r requirements.txt pyinstaller
+
+      - name: Build
+        run: |
+          python packaging/make_icon.py
+          pyinstaller --noconfirm packaging/VoiceKeyboard.spec
+
+      # 빌드한 exe 를 트레이 없이 띄워 숨긴 Chrome 엔진이 붙는지 확인한다.
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/VoiceKeyboard/VoiceKeyboard.exe -ArgumentList "--no-tray","--dry-run" -PassThru
+          $status = $null
+          for ($i = 0; $i -lt 90; $i++) {
+            try { $status = (Invoke-RestMethod http://localhost:8765/api/settings).status; if ($status.engine) { break } } catch {}
+            Start-Sleep 1
+          }
+          try { Invoke-RestMethod http://localhost:8765/api/sources | ConvertTo-Json -Depth 4 } catch { "sources: $_" }
+          $status | ConvertTo-Json
+          Stop-Process $p -Force
+          Get-Content "$env:APPDATA\VoiceKeyboard\app.log" -ErrorAction SilentlyContinue
+          if (-not $status.engine) { throw "엔진(Chrome)이 연결되지 않았습니다" }
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path dist/VoiceKeyboard -DestinationPath VoiceKeyboard-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoiceKeyboard-windows
+          path: VoiceKeyboard-windows.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" VoiceKeyboard-windows.zip --prerelease --title "${{ github.ref_name }}" --notes "Windows 빌드. 압축을 풀고 VoiceKeyboard.exe 를 실행하세요. Google Chrome 이 설치되어 있어야 합니다."

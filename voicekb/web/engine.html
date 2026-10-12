@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Voice Keyboard Engine</title>
+</head>
+<body>
+<script>
+// 숨긴(headless) Chrome 에서 도는 엔진. 화면은 없고 서버 명령만 받는다.
+//   음성 입력: 마이크 트랙 → SpeechRecognition.start(track) → 확정 문장을 서버로 (서버가 붙여넣기)
+//   자막: 서버가 보내는 시스템 소리 PCM → MediaStreamTrackGenerator 트랙 → 인식 → 문장 단위 번역 → 서버로
+
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let ws = null;
+
+function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+function report(where, error) { send({ type: "error", where, error: String(error) }); }
+
+// Chrome 은 침묵이나 시간 제한으로 세션을 끊으므로 켜져 있는 동안 다시 시작한다.
+// 장치 없음 같은 오류가 반복되면 간격을 늘리다가(최대 8초) 연속 5번이면 멈춘다.
+const MAX_ERRORS = 5;
+const BENIGN_ERRORS = new Set(["no-speech", "aborted"]);
+
+function makeRestarter(isActive, startFn, onGiveUp) {
+  let errors = 0;
+  return {
+    ok() { errors = 0; },
+    error(code) { if (!BENIGN_ERRORS.has(code)) errors++; },
+    ended() {
+      if (!isActive()) return;
+      if (errors >= MAX_ERRORS) { onGiveUp(); return; }
+      const delay = errors ? Math.min(500 * 2 ** (errors - 1), 8000) : 0;
+      setTimeout(() => { if (isActive()) { try { startFn(); } catch (_) { /* 이미 시작됨 */ } } }, delay);
+    },
+  };
+}
+
+function newRecognition(lang) {
+  const r = new Recognition();
+  r.lang = lang;
+  r.continuous = true;
+  r.interimResults = true;
+  return r;
+}
+
+// ───────────── 음성 입력 ─────────────
+
+let input = null;   // { rec, stream }
+
+async function startInput(lang, mic) {
+  stopInput();
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: mic ? { deviceId: { exact: mic } } : true });
+  } catch (err) {
+    send({ type: "input_stopped", reason: `마이크를 열 수 없습니다: ${err.message}` });
+    return;
+  }
+  const track = stream.getAudioTracks()[0];
+  const r = newRecognition(lang);
+  const state = { rec: r, stream };
+  input = state;
+  const restarter = makeRestarter(() => input === state, () => r.start(track), () => {
+    stopInput();
+    send({ type: "input_stopped", reason: "음성 인식 오류가 반복되어 멈췄습니다." });
+  });
+  r.onresult = (e) => {
+    restarter.ok();
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) send({ type: "final", text: e.results[i][0].transcript });
+    }
+  };
+  r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("input", e.error); };
+  r.onend = () => restarter.ended();
+  r.start(track);
+}
+
+function stopInput() {
+  const s = input;
+  if (!s) return;
+  input = null;
+  s.rec.onend = null;
+  try { s.rec.stop(); } catch (_) {}
+  s.stream.getTracks().forEach((t) => t.stop());
+}
+
+// ───────────── 자막 ─────────────
+
+const MAX_LINES = 2;
+const FLUSH_SILENCE_MS = 1200;
+const FLUSH_MAX_CHARS = 160;
+const SENTENCE_END = /[.!?。！？]$/;
+const SAMPLE_RATE = 16000;
+
+let cap = null;
+let lineSeq = 0;
+let builtinState = "unknown";
+
+async function createBuiltinTranslator(source) {
+  if (!("Translator" in self)) throw new Error("내장 번역 API 없음");
+  const opts = { sourceLanguage: source, targetLanguage: "ko" };
+  if ((await Translator.availability(opts)) === "unavailable") throw new Error(`${source}→ko 미지원`);
+  return Translator.create(opts);
+}
+
+function publish(c) {
+  if (cap !== c) return;
+  send({ type: "captions", lines: c.lines.map(({ src, ko }) => ({ src, ko })), live: c.live });
+}
+
+async function translateLive(c, text) {
+  if (!text) return "";
+  if (c.builtin) return c.builtin.translate(text).catch(() => "");
+  return "";  // Groq 는 확정 문장에만 쓴다
+}
+
+function bufferFinal(c, src) {
+  c.buffer = c.buffer ? `${c.buffer} ${src}` : src;
+  clearTimeout(c.flushTimer);
+  if (SENTENCE_END.test(c.buffer) || c.buffer.length >= FLUSH_MAX_CHARS) flushSentence(c);
+  else c.flushTimer = setTimeout(() => flushSentence(c), FLUSH_SILENCE_MS);
+}
+
+// 완성된 문장을 자막 줄로 확정한다. 내장 번역을 먼저 넣고, Groq 번역이 오면 교체한다.
+async function flushSentence(c) {
+  clearTimeout(c.flushTimer);
+  const src = c.buffer.trim();
+  c.buffer = "";
+  if (!src || cap !== c) return;
+  const line = { id: ++lineSeq, src, ko: "" };
+  const context = c.lines.map((l) => l.src).slice(-2);
+  c.lines.push(line);
+  if (c.lines.length > MAX_LINES) c.lines.shift();
+  c.live = null;
+  if (c.useGroq) send({ type: "translate", id: line.id, text: src, source: c.lang, context });
+  if (c.builtin) {
+    const ko = await c.builtin.translate(src).catch(() => "");
+    if (!line.groq) line.ko = ko;
+  }
+  publish(c);
+}
+
+function applyGroqTranslation(id, ko) {
+  const line = cap && cap.lines.find((l) => l.id === id);
+  if (!line) return;
+  line.ko = ko;
+  line.groq = true;
+  publish(cap);
+}
+
+async function startCaptions(lang, translator, groqAvailable) {
+  stopCaptions();
+  const source = lang.split("-")[0];
+  let builtin = null;
+  if (translator === "auto" || translator === "builtin") {
+    try { builtin = await createBuiltinTranslator(source); }
+    catch (err) { report("translator", err.message); }
+  }
+  const useGroq = groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
+
+  // 서버가 보내는 PCM 을 오디오 트랙으로 만든다.
+  const generator = new MediaStreamTrackGenerator({ kind: "audio" });
+  const writer = generator.writable.getWriter();
+  const r = newRecognition(lang);
+  const c = { rec: r, generator, writer, builtin, useGroq, lang, lines: [], live: null,
+              buffer: "", flushTimer: null, timestamp: 0, liveSeq: 0 };
+  cap = c;
+
+  const restarter = makeRestarter(() => cap === c, () => r.start(generator), () => {
+    stopCaptions();
+    send({ type: "captions_stopped", reason: "자막 인식 오류가 반복되어 멈췄습니다." });
+  });
+  r.onresult = async (e) => {
+    restarter.ok();
+    let live = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const res = e.results[i];
+      if (res.isFinal) { const t = res[0].transcript.trim(); if (t) bufferFinal(c, t); }
+      else live += res[0].transcript;
+    }
+    const pending = [c.buffer, live].filter(Boolean).join(" ").trim();
+    const seq = ++c.liveSeq;
+    const ko = await translateLive(c, pending);
+    if (cap === c && seq === c.liveSeq) { c.live = pending ? { src: pending, ko } : null; publish(c); }
+  };
+  r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("captions", e.error); };
+  r.onend = () => restarter.ended();
+  r.start(generator);
+  publish(c);
+}
+
+function pushAudio(buf) {
+  const c = cap;
+  if (!c) return;
+  const frames = buf.byteLength / 2;
+  const data = new AudioData({ format: "s16", sampleRate: SAMPLE_RATE, numberOfFrames: frames,
+                               numberOfChannels: 1, timestamp: c.timestamp, data: buf });
+  c.timestamp += Math.round((frames / SAMPLE_RATE) * 1e6);
+  c.writer.write(data).catch((err) => report("audio", err.message));
+}
+
+function stopCaptions() {
+  const c = cap;
+  if (!c) return;
+  cap = null;
+  clearTimeout(c.flushTimer);
+  c.rec.onend = null;
+  try { c.rec.stop(); } catch (_) {}
+  c.writer.close().catch(() => {});
+  c.generator.stop();
+  c.builtin?.destroy?.();
+}
+
+// ───────────── 서버 연결 ─────────────
+
+async function listMics() {
+  try {
+    // 권한을 받아야 장치 이름이 보인다 (엔진은 권한이 자동 허용됨).
+    if (!input) (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((t) => t.stop());
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === "audioinput").map((d) => ({ id: d.deviceId, label: d.label }));
+  } catch (err) {
+    report("mics", err.message);
+    return [];
+  }
+}
+
+// 내장 번역 API 는 Chrome 시작 후 몇 초 뒤에 생길 수 있어 잠시 기다리며 확인한다.
+async function probeBuiltinTranslator() {
+  for (let i = 0; i < 15 && !("Translator" in self); i++) await new Promise((r) => setTimeout(r, 1000));
+  if (!("Translator" in self)) builtinState = "unsupported";
+  else {
+    try { builtinState = await Translator.availability({ sourceLanguage: "en", targetLanguage: "ko" }); }
+    catch (err) { builtinState = `error: ${err.message}`; }
+  }
+  send({ type: "engine_info", builtin_translator: builtinState });
+}
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws?role=engine`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => send({ type: "engine_info", builtin_translator: builtinState });
+  ws.onclose = () => { stopInput(); stopCaptions(); setTimeout(connect, 1000); };
+  ws.onmessage = async (e) => {
+    if (e.data instanceof ArrayBuffer) { pushAudio(e.data); return; }
+    const msg = JSON.parse(e.data);
+    switch (msg.cmd || msg.type) {
+      case "input_start": startInput(msg.lang, msg.mic); break;
+      case "input_stop": stopInput(); break;
+      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq); break;
+      case "captions_stop": stopCaptions(); break;
+      case "list_mics": send({ type: "mics", mics: await listMics() }); break;
+      case "translation": applyGroqTranslation(msg.id, msg.ko); break;
+    }
+  };
+}
+
+if (!Recognition) report("engine", "SpeechRecognition 없음 — 정식 Google Chrome 이 필요합니다");
+connect();
+probeBuiltinTranslator();
+</script>
+</body>
+</html>

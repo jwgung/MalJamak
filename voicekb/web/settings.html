@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Keyboard 설정</title>
+<style>
+  :root { --bg: #f7f7f8; --card: #fff; --fg: #111; --muted: #6b7280; --border: #e5e7eb; --accent: #2563eb;
+          --ok: #16a34a; --warn: #d97706; --bad: #dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111214; --card: #1b1c1f; --fg: #eee; --muted: #9ca3af; --border: #2c2d31; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px 48px; font: 14px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  h2 { font-size: 14px; margin: 0 0 12px; }
+  label.row { display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: center; margin: 8px 0; }
+  label.row > span { color: var(--muted); }
+  input[type=text], input[type=password], input[type=number], select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
+  select option { background: var(--card); }
+  .check { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 4px 0 0; }
+  code { font-size: 12px; background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
+  .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+  .pill { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+  .pill b { display: block; font-size: 12px; color: var(--muted); font-weight: 500; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .buttons { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #error { margin-top: 10px; }
+  #saved { color: var(--ok); margin-left: 8px; }
+  @media (max-width: 480px) { label.row { grid-template-columns: 1fr; gap: 4px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice Keyboard</h1>
+
+  <section>
+    <h2>상태</h2>
+    <div class="status">
+      <div class="pill"><b>엔진 (Chrome)</b><span id="sEngine">…</span></div>
+      <div class="pill"><b>음성 입력</b><span id="sInput">…</span></div>
+      <div class="pill"><b>자막</b><span id="sCaptions">…</span></div>
+      <div class="pill"><b>내장 번역</b><span id="sBuiltin">…</span></div>
+      <div class="pill"><b>Groq</b><span id="sGroq">…</span></div>
+      <div class="pill"><b>붙여넣기</b><span id="sPaste">…</span></div>
+    </div>
+    <div id="error" class="hint bad"></div>
+    <div class="buttons">
+      <button id="btnInput">음성 입력 시작</button>
+      <button id="btnCaptions">자막 켜기</button>
+    </div>
+  </section>
+
+  <form id="form">
+    <section>
+      <h2>음성 입력 — 포커스된 입력창에 붙여넣기</h2>
+      <label class="row"><span>단축키</span><input type="text" name="input.hotkey" placeholder="<ctrl>+<alt>+<space>"></label>
+      <label class="row"><span>방식</span>
+        <select name="input.mode">
+          <option value="toggle">누를 때마다 시작/정지</option>
+          <option value="hold">누르고 있는 동안만 듣기</option>
+        </select></label>
+      <label class="row"><span>언어</span>
+        <select name="input.lang">
+          <option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option>
+        </select></label>
+      <label class="row"><span>마이크</span><select name="input.mic"><option value="">기본 마이크</option></select></label>
+      <label class="row"><span>문장 사이</span>
+        <select name="input.separator"><option value=" ">공백 한 칸</option><option value="">붙여 쓰기</option></select></label>
+      <label class="check"><input type="checkbox" name="input.groq_correct"> Groq 로 교정 (한영 혼용·띄어쓰기·군말)</label>
+      <p class="hint">단축키 형식 예: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code>.
+        전역 단축키를 못 쓰는 환경(Linux Wayland)은 OS 단축키에 <code>curl -s -X POST http://localhost:<span class="port"></span>/toggle</code> 를 등록하세요.</p>
+    </section>
+
+    <section>
+      <h2>번역 자막 — PC 소리 → 한국어</h2>
+      <label class="row"><span>원어</span>
+        <select name="captions.lang">
+          <option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option>
+        </select></label>
+      <label class="row"><span>소리 출처</span><select name="captions.source"><option value="loopback">PC 소리 (기본 스피커 출력)</option></select></label>
+      <label class="row"><span>번역 엔진</span>
+        <select name="captions.translator">
+          <option value="auto">자동 (내장 번역 → 안 되면 Groq)</option>
+          <option value="builtin">Chrome 내장 번역만</option>
+          <option value="groq">Groq 만</option>
+        </select></label>
+      <label class="row"><span>글자 크기</span><input type="number" name="captions.font_size" min="12" max="64"></label>
+      <label class="row"><span>투명도</span><input type="number" name="captions.opacity" min="0.3" max="1" step="0.05"></label>
+      <p class="hint">macOS 는 PC 소리를 직접 받을 수 없어 BlackHole 같은 가상 장치를 소리 출처로 고릅니다.
+        자막 창은 드래그로 옮기고 더블클릭으로 원문 표시를 켜고 끕니다.</p>
+    </section>
+
+    <section>
+      <h2>Groq (선택)</h2>
+      <label class="row"><span>API 키</span><input type="password" name="groq.api_key" autocomplete="off"></label>
+      <label class="row"><span>모델</span>
+        <select name="groq.model">
+          <option value="openai/gpt-oss-20b">GPT-OSS 20B (빠름)</option>
+          <option value="openai/gpt-oss-120b">GPT-OSS 120B (품질)</option>
+        </select></label>
+      <p class="hint" id="keyHint"></p>
+      <div class="buttons"><button type="button" id="btnClearKey">키 삭제</button></div>
+    </section>
+
+    <section>
+      <h2>일반</h2>
+      <label class="check"><input type="checkbox" name="autostart"> 로그인할 때 자동 실행</label>
+    </section>
+
+    <button class="primary" type="submit">저장</button><span id="saved"></span>
+  </form>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const fields = [...document.querySelectorAll("#form [name]")];
+
+function getPath(obj, path) { return path.split(".").reduce((o, k) => o?.[k], obj); }
+function setPath(obj, path, value) {
+  const keys = path.split("."); const last = keys.pop();
+  keys.reduce((o, k) => (o[k] ??= {}), obj)[last] = value;
+}
+
+function ensureOption(select, value, label) {
+  if (![...select.options].some((o) => o.value === value)) select.add(new Option(label, value));
+}
+
+function fill(settings) {
+  for (const el of fields) {
+    const value = getPath(settings, el.name);
+    if (el.name === "groq.api_key") { el.value = ""; continue; }
+    if (el.type === "checkbox") el.checked = !!value;
+    else {
+      if (el.tagName === "SELECT" && value != null) ensureOption(el, String(value), String(value));
+      el.value = value ?? "";
+    }
+  }
+  $("#keyHint").textContent = settings.groq.key_set
+    ? `키 설정됨 (…${settings.groq.key_hint}). 바꾸려면 새 키를 입력하세요.`
+    : "키가 없습니다. https://console.groq.com 에서 무료로 발급받을 수 있습니다.";
+  document.querySelectorAll(".port").forEach((el) => (el.textContent = settings.port));
+}
+
+function showStatus(s) {
+  const set = (id, text, cls) => { const el = $(id); el.textContent = text; el.className = cls || ""; };
+  set("#sEngine", s.engine ? "준비됨" : "시작 중…", s.engine ? "ok" : "warn");
+  set("#sInput", s.listening ? "듣는 중" : "대기", s.listening ? "bad" : "");
+  set("#sCaptions", s.captions ? "켜짐" : "꺼짐", s.captions ? "ok" : "");
+  const builtin = { available: ["사용 가능", "ok"], downloadable: ["모델 받기 필요", "warn"],
+                    downloading: ["받는 중", "warn"], unavailable: ["지원 안 함", "bad"],
+                    unsupported: ["지원 안 함", "bad"], unknown: ["확인 중…", ""] }[s.builtin_translator]
+                  || [s.builtin_translator, "bad"];
+  set("#sBuiltin", ...builtin);
+  set("#sGroq", s.groq ? "키 있음" : "키 없음", s.groq ? "ok" : "");
+  set("#sPaste", s.paste_backend === "dry-run" ? "사용 불가" : s.paste_backend, s.paste_backend === "dry-run" ? "bad" : "");
+  $("#error").textContent = s.last_error || "";
+  $("#btnInput").textContent = s.listening ? "음성 입력 정지" : "음성 입력 시작";
+  $("#btnCaptions").textContent = s.captions ? "자막 끄기" : "자막 켜기";
+}
+
+async function loadSources() {
+  try {
+    const { mics, audio_sources } = await (await fetch("/api/sources")).json();
+    const mic = $('[name="input.mic"]'), cur = mic.value;
+    [...mic.options].slice(1).forEach((o) => o.remove());
+    mics.filter((m) => m.id !== "default" && m.id !== "communications")
+        .forEach((m, i) => mic.add(new Option(m.label || `마이크 ${i + 1}`, m.id)));
+    mic.value = cur;
+    const src = $('[name="captions.source"]'), curSrc = src.value;
+    [...src.options].slice(1).forEach((o) => o.remove());
+    audio_sources.forEach((name) => src.add(new Option(name, name)));
+    if (curSrc) { ensureOption(src, curSrc, curSrc); src.value = curSrc; }
+  } catch (_) { /* 엔진이 아직 없으면 다음에 */ }
+}
+
+async function load() {
+  const { settings, status } = await (await fetch("/api/settings")).json();
+  fill(settings);
+  showStatus(status);
+  await loadSources();
+  fill(settings);
+}
+
+$("#form").onsubmit = async (e) => {
+  e.preventDefault();
+  const patch = {};
+  for (const el of fields) {
+    if (el.name === "groq.api_key") { if (el.value.trim()) setPath(patch, el.name, el.value.trim()); continue; }
+    let value = el.type === "checkbox" ? el.checked : el.value;
+    if (el.type === "number") value = Number(value);
+    setPath(patch, el.name, value);
+  }
+  const res = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify(patch) });
+  const { settings, status } = await res.json();
+  fill(settings); showStatus(status);
+  $("#saved").textContent = "저장됨"; setTimeout(() => ($("#saved").textContent = ""), 2000);
+};
+
+$("#btnClearKey").onclick = async () => {
+  const res = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+                                             body: JSON.stringify({ groq: { api_key: "" } }) });
+  const { settings, status } = await res.json();
+  fill(settings); showStatus(status);
+};
+$("#btnInput").onclick = () => fetch("/toggle", { method: "POST" });
+$("#btnCaptions").onclick = () => fetch("/captions/toggle", { method: "POST" });
+
+let engineReady = false;
+function watch() {
+  const ws = new WebSocket(`ws://${location.host}/ws?role=settings`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type !== "status") return;
+    showStatus(msg);
+    if (msg.engine && !engineReady) loadSources();  // 엔진이 막 준비됐을 때만 장치 목록을 다시 읽는다
+    engineReady = msg.engine;
+  };
+  ws.onclose = () => setTimeout(watch, 1500);
+}
+
+load();
+watch();
+</script>
+</body>
+</html>
