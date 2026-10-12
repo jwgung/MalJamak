@@ -20,7 +20,9 @@ jobs:
           python-version: "3.12"
 
       - name: Unit tests
-        run: node tests/chunker.test.mjs
+        run: |
+          node tests/chunker.test.mjs
+          node tests/interpret.test.mjs
 
       - name: Install
         run: pip install -r requirements.txt pyinstaller

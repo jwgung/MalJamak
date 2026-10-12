@@ -51,9 +51,7 @@ class TestSource:
                         self._set(status="downloading", progress=progress, url=url)
 
             self.cache_dir.mkdir(parents=True, exist_ok=True)
-            opts = {
-                # Chrome 이 재생·구간 이동을 확실히 지원하는 webm(opus) 우선. 변환(ffmpeg)이 필요 없는 형식만.
-                "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio",
+            base = {
                 "outtmpl": str(self.cache_dir / "%(id)s.%(ext)s"),
                 "noplaylist": True,
                 "quiet": True,
@@ -61,9 +59,19 @@ class TestSource:
                 "noprogress": True,
                 "progress_hooks": [hook],
             }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                path = Path(ydl.prepare_filename(info))
+            # Chrome 이 재생·구간 이동을 확실히 지원하는 webm(opus) 우선. 변환(ffmpeg)이 필요 없는 형식만.
+            # 영상에 따라 특정 형식이 403 으로 막히므로 차례로 시도한다.
+            last_err: Exception | None = None
+            for fmt in ("bestaudio[ext=webm]", "bestaudio[ext=m4a]", "bestaudio"):
+                try:
+                    with yt_dlp.YoutubeDL({**base, "format": fmt}) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        path = Path(ydl.prepare_filename(info))
+                    break
+                except Exception as err:  # 형식 없음·403 등 → 다음 형식
+                    last_err = err
+            else:
+                raise last_err or RuntimeError("받을 수 있는 소리 형식이 없습니다")
             if not path.exists():
                 raise RuntimeError("받은 파일을 찾지 못했습니다")
             self.path = path

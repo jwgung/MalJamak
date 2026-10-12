@@ -45,6 +45,7 @@ class Hub:
         self.live_on = False
         self.live_preview = ""
         self.live_test = False  # 이번 현장 자막이 테스트 소리(유튜브)로 도는지
+        self.live_other: list[str] = []  # 순차통역 모드: 강사 원어 인식 결과 (교정 화면 참고용)
         self.test = TestSource(config_dir() / "test-audio", self._test_changed)
 
         self.listening = False
@@ -238,10 +239,12 @@ class Hub:
             self.live.start()
             self.live_on = True
             self.live_test = test
+            self.live_other = []
             self.live_preview = ""
             await self._send(self.engine, {
                 "cmd": "live_start", "lang": cfg["lang"], "mic": cfg["mic"], "local": cfg["engine"] == "local",
                 "test_audio": f"/live/test-audio?f={self.test.path.name}" if test else None,
+                "mode": cfg["mode"], "other_lang": cfg["other_lang"],
                 "offset": max(0.0, float(offset)),
                 "processing": cfg["voice_processing"],
                 "pause_ms": int(cfg["pause_seconds"] * 1000), "max_ms": int(cfg["max_wait_seconds"] * 1000),
@@ -260,7 +263,7 @@ class Hub:
 
     def _live_status(self) -> dict:
         cfg = self.config.get()["live"]
-        return {"live": self.live_on, "live_test": self.live_test, "test": self.test.view(),
+        return {"live": self.live_on, "live_test": self.live_test, "test": self.test.view(), "mode": cfg["mode"],
                 "test_audio": f"/live/test-audio?f={self.test.path.name}" if self.test.path else None,
                 "engine": self.engine is not None, "review": cfg["review"],
                 "countdown": cfg["countdown"], "transcript": str(self.live.transcript_path()) if self.live.started else "",
@@ -269,6 +272,7 @@ class Hub:
     async def broadcast_live(self, queue: bool = True, display: bool = True) -> None:
         if queue:
             payload = {"type": "queue", "items": self.live.queue_view(), "preview": self.live_preview,
+                       "other": self.live_other[-20:],
                        "status": self._live_status()}
             for ws in list(self.operators):
                 await self._send(ws, payload)
@@ -478,6 +482,10 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 await hub._changed()
             elif kind == "draft":
                 await hub.on_draft(data.get("text", ""), data.get("reason", ""))
+            elif kind == "live_other":
+                hub.live_other.append(data.get("text", ""))
+                hub.live_other = hub.live_other[-200:]
+                await hub.broadcast_live(display=False)
             elif kind == "live_preview":
                 hub.live_preview = data.get("text", "")
                 await hub.broadcast_live(display=False)

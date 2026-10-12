@@ -369,6 +369,7 @@ async function startLive(msg) {
     return;
   }
   if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); testAudio?.pause(); return; }
+  if (msg.mode === "interpret") { await startInterpret(msg, stream, testAudio); return; }
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
@@ -413,6 +414,7 @@ async function openTestAudio(url, offset) {
 
 function stopLive() {
   liveGen++;
+  stopInterpret();
   const L = live;
   if (!L) return;
   live = null;
@@ -421,6 +423,186 @@ function stopLive() {
   try { L.rec.stop(); } catch (_) {}
   L.stream.getTracks().forEach((t) => t.stop());
   if (L.testAudio) { L.testAudio.onended = null; L.testAudio.pause(); L.testAudio.removeAttribute("src"); L.testAudio.load(); }
+}
+
+// ───────────── 순차통역 모드 ─────────────
+// 강사(원어)와 통역사(한국어)가 번갈아 말하는 현장에서 한국어만 받는다. (실험: 순차통역 설교 2분, 유튜브 자막 대비 77~79%)
+// - 한 인식 세션에 두 언어가 섞이면 한국어 인식기가 멈추므로, 쉼마다 세션을 새로 연다.
+// - 인식기에는 소리를 delay 만큼 늦게 넣고 쉼 감지는 원래 소리로 해서, 쉼이 인식기에 닿기 전에 새 세션을 준비한다.
+// - 연속 세션(이전 것은 겹쳐 돌린 뒤 정지) + 단발 세션(구글이 말 끝을 판단)을 함께 돌려 서로 빈 곳을 메운다.
+// - 결과는 영어 단어를 빼고, 비슷한 중복·앞부분 반복을 합쳐 새로 늘어난 말만 조각으로 보낸다.
+
+// ── 순차통역 합치기 시작
+function normKo(s) { return s.replace(/[^가-힣0-9]/g, ""); }
+
+// 두 문자열의 공통 구간 목록 (difflib.get_matching_blocks 와 같은 방식, 짧은 문자열용)
+function matchingBlocks(a, b) {
+  const out = [];
+  const stack = [[0, a.length, 0, b.length]];
+  while (stack.length) {
+    const [alo, ahi, blo, bhi] = stack.pop();
+    let best = [alo, blo, 0];
+    let prev = new Map();
+    for (let i = alo; i < ahi; i++) {
+      const cur = new Map();
+      for (let j = blo; j < bhi; j++) {
+        if (a[i] !== b[j]) continue;
+        const k = (prev.get(j - 1) || 0) + 1;
+        cur.set(j, k);
+        if (k > best[2]) best = [i - k + 1, j - k + 1, k];
+      }
+      prev = cur;
+    }
+    const [i, j, k] = best;
+    if (!k) continue;
+    out.push(best);
+    if (alo < i && blo < j) stack.push([alo, i, blo, j]);
+    if (i + k < ahi && j + k < bhi) stack.push([i + k, ahi, j + k, bhi]);
+  }
+  return out.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+}
+
+// 단어 목록에서 앞쪽 n 글자(공백·기호 제외)에 해당하는 단어 수. exact 면 정확히 n 에서 끝날 때만.
+function wordsCovering(words, n, exact) {
+  let acc = 0;
+  for (let i = 0; i < words.length; i++) {
+    if (acc >= n) return exact && acc !== n ? -1 : i;
+    acc += normKo(words[i]).length;
+  }
+  return exact && acc !== n ? -1 : words.length;
+}
+
+// 겹쳐 도는 세션들의 결과를 이어 붙인다. add() 는 새로 늘어난 단어만 돌려준다.
+class InterpretMerger {
+  constructor(window = 160, similar = 0.6) { this.words = []; this.window = window; this.similar = similar; }
+  add(text) {
+    let words = text.split(/\s+/).filter((w) => w && !/[A-Za-z]/.test(w) && /[가-힣0-9]/.test(w));
+    let nw = normKo(words.join(""));
+    if (nw.length < 2) return [];
+    const tail = normKo(this.words.join("")).slice(-this.window);
+    // 최근 글의 끝과 새 결과의 앞이 그대로 겹치면("…바로" + "바로 노래라는…") 겹친 앞부분을 뗀다
+    let L = 0;
+    for (let k = Math.min(tail.length, nw.length); k > 1; k--) if (tail.endsWith(nw.slice(0, k))) { L = k; break; }
+    if (L) {
+      const cut = wordsCovering(words, L, true);
+      if (cut >= 0) { words = words.slice(cut); nw = normKo(words.join("")); if (nw.length < 2) return []; }
+    }
+    // 같은 말을 조금 다르게 받아 적은 중복("불평/불편")이면 겹치지 않는 뒷부분만 붙인다.
+    // "그리고 그 백성은 동일한 백성이었습니다" 와 "그 백성은 사실 저였습니다" 처럼 공통 글자("그 백성은", "~습니다")가
+    // 흩어져 있을 뿐인 다른 문장은 중복이 아니다. 그래서 공통 구간이 걸친 최근 글의 구간과 새 결과가 전체적으로 닮아야 한다.
+    const blocks = matchingBlocks(tail, nw).filter((b) => b[2] >= 2);
+    const matched = blocks.reduce((sum, b) => sum + b[2], 0);
+    const region = blocks.length ? blocks[blocks.length - 1][0] + blocks[blocks.length - 1][2] - blocks[0][0] : 0;
+    const alike = blocks.length ? (2 * matched) / (region + nw.length) : 0;  // 0~1, difflib ratio 와 같은 식
+    if (blocks.length && matched / nw.length >= this.similar && alike >= 0.75) {
+      const [ai, bj, k] = blocks[blocks.length - 1];
+      if (ai + k >= tail.length - 3 && nw.length - (bj + k) >= 3) {
+        const added = words.slice(wordsCovering(words, bj + k, false));
+        this.words.push(...added);
+        return added;
+      }
+      return [];
+    }
+    this.words.push(...words);
+    return words;
+  }
+}
+// ── 순차통역 합치기 끝
+
+let interp = null;
+
+async function startInterpret(msg, stream, testAudio) {
+  const target = msg.lang || "ko-KR", other = msg.other_lang || "en-US";
+  // 일반 모드의 조각 나누기 값(pause_ms=0.7초)과 섞이지 않게 순차통역 전용 값을 쓴다.
+  // 강사↔통역사 바통 넘김의 쉼은 0.3~1.0초였다 (실험 영상 분석).
+  const pauseMs = msg.interp_pause_ms || 300, threshold = msg.interp_threshold || 0.02;
+  const delaySec = (msg.interp_delay_ms || 600) / 1000, overlapMs = msg.interp_overlap_ms || 1200;
+  const ctx = new AudioContext();
+  const src = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser(); analyser.fftSize = 1024; src.connect(analyser);
+  const delay = ctx.createDelay(2); delay.delayTime.value = delaySec;
+  const dest = ctx.createMediaStreamDestination(); src.connect(delay).connect(dest);
+  const delayed = dest.stream.getAudioTracks()[0];
+  const buf = new Float32Array(analyser.fftSize);
+  const I = { ctx, stream, testAudio, merger: new InterpretMerger(), sessions: new Set(), timers: [], otherAt: 0, stopped: false };
+  interp = I;
+
+  const session = (lang, continuous, onText, lifeMs) => {
+    if (I.stopped) return null;
+    debug("open", lang, continuous ? "연속" : "단발", "열린 세션", I.sessions.size + 1);
+    const r = newRecognition(lang);
+    r.continuous = continuous;
+    r.interimResults = false;
+    const tr = delayed.clone();
+    I.sessions.add(r);
+    r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) onText(e.results[i][0].transcript.trim()); };
+    r.onerror = (e) => { if (!BENIGN_ERRORS.has(e.error)) report("interpret", e.error); };
+    r.onend = () => { tr.stop(); I.sessions.delete(r); };
+    try { r.start(tr); } catch (err) { report("interpret", err.message); }
+    if (lifeMs) I.timers.push(setTimeout(() => { try { r.stop(); } catch (_) {} }, lifeMs));
+    return r;
+  };
+  const debug = (...a) => { if (window.VK_DEBUG) console.log("INTERP", ...a); };  // 진단용: CDP 로 window.VK_DEBUG = true
+  const onTarget = (text) => {
+    if (I.stopped) return;
+    debug("target", text);
+    // 원어를 한글로 받아 적은 짧은 결과("씽킹")는 같은 시각에 원어가 인식됐으면 버린다
+    if (normKo(text).length <= 6 && performance.now() - I.otherAt < 2500) { debug("drop-short", text); return; }
+    const added = I.merger.add(text);
+    if (added.length) send({ type: "draft", text: added.join(" "), reason: "final" });
+  };
+  const onOther = (text) => {
+    if (I.stopped || !text) return;
+    I.otherAt = performance.now();
+    send({ type: "live_other", text });
+  };
+  let A = session(target, true, onTarget, 0);
+  let O = session(other, true, onOther, 0);
+  session(target, false, onTarget, 10000);
+  const cut = () => {
+    if (I.stopped) return;
+    const oldA = A, oldO = O;
+    A = session(target, true, onTarget, 0);
+    O = session(other, true, onOther, 0);
+    session(target, false, onTarget, 10000);
+    I.timers.push(setTimeout(() => { for (const r of [oldA, oldO]) try { r?.stop(); } catch (_) {} }, overlapMs));
+  };
+  let speaking = false, silentSince = 0, dbgMin = 1, dbgMax = 0, dbgAt = performance.now(), dbgTicks = 0;
+  I.timers.push(setInterval(() => {
+    analyser.getFloatTimeDomainData(buf);
+    let sum = 0; for (const v of buf) sum += v * v;
+    const rms = Math.sqrt(sum / buf.length), now = performance.now();
+    if (window.VK_DEBUG) {
+      dbgMin = Math.min(dbgMin, rms); dbgMax = Math.max(dbgMax, rms); dbgTicks++;
+      if (now - dbgAt > 2000) { debug("rms", dbgMin.toFixed(4), dbgMax.toFixed(4), "ticks", dbgTicks, "ctx", ctx.state, ctx.sampleRate); dbgMin = 1; dbgMax = 0; dbgTicks = 0; dbgAt = now; }
+    }
+    if (rms > threshold) { speaking = true; silentSince = 0; }
+    else if (speaking) {
+      if (!silentSince) silentSince = now;
+      else if (now - silentSince >= pauseMs) {
+        speaking = false;
+        // 쉼이 시작된 지점이 늦춘 소리로 인식기에 닿는 순간 새 세션을 연다
+        I.timers.push(setTimeout(cut, Math.max(0, delaySec * 1000 - pauseMs + 50)));
+      }
+    }
+  }, 30));
+  if (testAudio) testAudio.onended = () => {
+    if (interp !== I) return;
+    stopInterpret();
+    send({ type: "live_stopped", reason: "테스트 소리가 끝났습니다." });
+  };
+}
+
+function stopInterpret() {
+  const I = interp;
+  if (!I) return;
+  interp = null;
+  I.stopped = true;
+  for (const t of I.timers) { clearTimeout(t); clearInterval(t); }
+  for (const r of I.sessions) { r.onend = null; try { r.abort(); } catch (_) {} }
+  I.stream.getTracks().forEach((t) => t.stop());
+  I.ctx.close().catch(() => {});
+  if (I.testAudio) { I.testAudio.onended = null; I.testAudio.pause(); I.testAudio.removeAttribute("src"); I.testAudio.load(); }
 }
 
 // ───────────── 서버 연결 ─────────────

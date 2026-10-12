@@ -34,6 +34,9 @@ DEFAULTS: dict = {
     },
     "live": {  # 현장 자막: 마이크 → 조각 → 조작자 검토 → 자막 화면
         "lang": "ko-KR",
+        # normal: 한 언어 그대로. interpret: 순차통역(강사 원어와 통역 한국어가 번갈아 나옴)에서 한국어만 받는다
+        "mode": "normal",
+        "other_lang": "en-US",  # 순차통역 모드에서 강사가 쓰는 원어 (교정 화면 참고용으로도 인식)
         "engine": "cloud",
         "mic": "",  # 믹서 출력을 받는 USB 오디오 인터페이스 등
         "voice_processing": False,  # 잡음 제거·자동 음량. 믹서 직결이면 끄는 게 낫다

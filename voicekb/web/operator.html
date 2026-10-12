@@ -57,6 +57,9 @@
   #testUrl { flex: 1; min-width: 220px; }
   #testOffset { width: 72px; }
   #testState.ready { color: var(--ok); } #testState.error { color: var(--bad); }
+  #other { padding: 8px 16px; border-top: 1px solid var(--border); background: var(--card); font-size: 13px; color: var(--muted); }
+  #other b { color: var(--fg); font-weight: 600; margin-right: 6px; }
+  #other div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #preview { padding: 10px 16px; border-top: 1px solid var(--border); background: var(--card); color: var(--muted);
              font-style: italic; min-height: 44px; }
   footer { padding: 6px 16px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
@@ -69,6 +72,13 @@
   <button id="btnLive" class="primary">자막 시작</button>
   <span id="state" class="pill">대기</span>
   <span class="grow"></span>
+  <label class="pill">자막 방식
+    <select id="mode">
+      <option value="normal">일반</option>
+      <option value="interpret">순차통역 (한국어만)</option>
+    </select></label>
+  <label class="pill" id="otherWrap" hidden>강사 언어
+    <select id="otherLang"><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></label>
   <label class="pill">검토
     <select id="review">
       <option value="auto">자동 내보내기</option>
@@ -109,6 +119,7 @@
     소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</p>
 </details>
 <main id="list"></main>
+<div id="other" hidden></div>
 <div id="preview"></div>
 <footer>
   <kbd>Enter</kbd> 내보내기(고친 내용 포함) · <kbd>Shift</kbd>+<kbd>Enter</kbd> 내보내고 줄바꿈(나간 조각은 줄바꿈 켜기/끄기) · <kbd>Esc</kbd> 버리기 · <kbd>↑</kbd><kbd>↓</kbd> 이동 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 대기 중 모두 내보내기
@@ -139,7 +150,9 @@ function connect() {
     const msg = JSON.parse(e.data);
     if (msg.type !== "queue") return;
     items = msg.items; status = msg.status; receivedAt = performance.now();
-    $("preview").textContent = msg.preview ? `말하는 중: ${msg.preview}` : "";
+    $("preview").textContent = msg.preview ? `말하는 중: ${msg.preview}`
+      : status.live && status.mode === "interpret" ? "순차통역: 강사 말은 건너뛰고 통역(한국어) 구간만 받습니다" : "";
+    renderOther(msg.other || []);
     render();
   };
   ws.onclose = () => { $("state").textContent = "연결 끊김, 재연결 중…"; setTimeout(connect, 1000); };
@@ -174,12 +187,29 @@ function renderTest() {
   if (!status.live && !player.paused) player.pause();
 }
 
+// 순차통역 모드: 강사 원어 인식 결과를 참고용으로 보여준다 (빠진 통역을 보완할 때 무슨 말이었는지 확인).
+function renderOther(lines) {
+  const box = $("other");
+  box.hidden = status.mode !== "interpret" || !lines.length;
+  if (box.hidden) return;
+  box.replaceChildren(...lines.slice(-3).map((t, i, arr) => {
+    const div = document.createElement("div");
+    if (i === 0) { const b = document.createElement("b"); b.textContent = "강사 원어"; div.append(b); }
+    div.append(t);
+    if (i === arr.length - 1) div.style.color = "var(--fg)";
+    return div;
+  }));
+}
+
 function renderHeader() {
   $("btnLive").textContent = status.live ? "자막 정지" : "자막 시작";
   $("btnLive").className = status.live ? "danger" : "primary";
   $("state").textContent = status.live ? "● 인식 중" : status.engine ? "대기" : "엔진 준비 중…";
   $("state").className = status.live ? "pill on" : "pill";
   if (document.activeElement !== $("review")) $("review").value = status.review;
+  if (document.activeElement !== $("mode")) $("mode").value = status.mode || "normal";
+  $("otherWrap").hidden = $("mode").value !== "interpret";
+  $("mode").disabled = $("otherLang").disabled = !!status.live;  // 방식은 시작 전에 정한다
   if (document.activeElement !== $("countdown")) $("countdown").value = status.countdown;
   $("error").textContent = status.last_error || "";
   $("file").textContent = status.transcript ? `기록: ${status.transcript}` : "";
@@ -318,7 +348,7 @@ function tick() {
 async function loadSettings() {
   const { settings } = await (await fetch("/api/settings")).json();
   const l = settings.live;
-  $("lang").value = l.lang; $("engine").value = l.engine; $("processing").value = String(l.voice_processing);
+  $("lang").value = l.lang; $("engine").value = l.engine; $("otherLang").value = l.other_lang; $("processing").value = String(l.voice_processing);
   $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines; $("autobreak").value = String(l.auto_break);
   try {
     const { mics } = await (await fetch("/api/sources")).json();
@@ -334,6 +364,8 @@ async function save(patch) {
 }
 
 $("review").onchange = () => save({ review: $("review").value });
+$("mode").onchange = () => { $("otherWrap").hidden = $("mode").value !== "interpret"; save({ mode: $("mode").value }); };
+$("otherLang").onchange = () => save({ other_lang: $("otherLang").value });
 $("countdown").onchange = () => save({ countdown: Number($("countdown").value) });
 $("mic").onchange = () => save({ mic: $("mic").value });
 $("lang").onchange = () => save({ lang: $("lang").value });
