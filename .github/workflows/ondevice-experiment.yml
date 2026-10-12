@@ -31,7 +31,7 @@ jobs:
             Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 2
             $args = @("--headless=new", "--user-data-dir=$prof", "--no-first-run", "--remote-debugging-port=9333",
                       "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
-                      "--use-file-for-fake-audio-capture=$dir\ko.wav") + $extra + @("http://localhost:8799/")
+                      "--use-file-for-fake-audio-capture=$dir\ko.wav", "--enable-logging", "--v=0") + $extra + @("http://localhost:8799/")
             Start-Process $chrome -ArgumentList $args | Out-Null
             for ($i = 0; $i -lt 30; $i++) {
               try { if ((Invoke-RestMethod http://127.0.0.1:9333/json/list) | Where-Object { $_.url -like "*8799*" }) { break } } catch {}
@@ -45,21 +45,14 @@ jobs:
           }
 
           Start-Engine @()
-          Run "online: where" 0 where.js
-          Run "online: available (before)" 0 local_avail.js
-          Run "online: install WITHOUT user gesture" 0 install.js 0
-          Run "online: install with user gesture" 0 install.js 1
-          Run "online: available (after)" 0 local_avail.js
-          Run "online: LOCAL recognition" 25 local_track.js
-          Run "online: CLOUD recognition (baseline)" 15 cloud_track.js
-
-          Start-Engine @("--proxy-server=http://127.0.0.1:9")
-          Run "offline: where" 0 where.js
-          Run "offline: network check" 0 netcheck.js
-          Run "offline: available (before)" 0 local_avail.js
-          Run "offline: install with user gesture" 0 install.js 1
-          Run "offline: available (after)" 0 local_avail.js
-          Run "offline: LOCAL recognition" 25 local_track.js
-          Run "offline: CLOUD recognition (should fail)" 12 cloud_track.js
+          Run "net: google reachable?" 0 netcheck.js
+          Run "install" 0 install.js 0
+          Run "available" 0 local_avail.js
+          Run "CLOUD default mic" 20 local_mic_off.js
+          Run "LOCAL default mic" 25 local_mic_on.js
+          Run "LOCAL track" 25 local_track.js
+          Run "CLOUD track" 20 cloud_track.js
           Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force
+          "===== chrome log (speech/soda)"
+          Get-Content "$prof\chrome_debug.log" -ErrorAction SilentlyContinue | Select-String -Pattern "soda|speech|Speech|SODA|on_device|recogni" | Select-Object -Last 40
           exit 0
