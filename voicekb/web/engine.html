@@ -133,10 +133,10 @@ let capGen = 0;
 let lineSeq = 0;
 let builtinState = "unknown";
 
-async function createBuiltinTranslator(source) {
+async function createBuiltinTranslator(source, target = "ko") {
   if (!("Translator" in self)) throw new Error("내장 번역 API 없음");
-  const opts = { sourceLanguage: source, targetLanguage: "ko" };
-  if ((await Translator.availability(opts)) === "unavailable") throw new Error(`${source}→ko 미지원`);
+  const opts = { sourceLanguage: source, targetLanguage: target };
+  if ((await Translator.availability(opts)) === "unavailable") throw new Error(`${source}→${target} 미지원`);
   return Translator.create(opts);
 }
 
@@ -170,7 +170,7 @@ async function flushSentence(c) {
   c.lines.push(line);
   if (c.lines.length > MAX_LINES) c.lines.shift();
   c.live = null;
-  if (c.useGroq) send({ type: "translate", id: line.id, text: src, source: c.lang, context });
+  if (c.useGroq) send({ type: "translate", id: line.id, text: src, source: c.lang, target: c.targetLang, context });
   if (c.builtin) {
     const ko = await c.builtin.translate(src).catch(() => "");
     if (!line.groq) line.ko = ko;
@@ -186,7 +186,7 @@ function applyGroqTranslation(id, ko) {
   publish(cap);
 }
 
-async function startCaptions(lang, translator, groqAvailable, local, translate = true) {
+async function startCaptions(lang, translator, groqAvailable, local, translate = true, targetLang = "ko-KR") {
   stopCaptions();
   const gen = capGen;
   if (local) {
@@ -196,7 +196,7 @@ async function startCaptions(lang, translator, groqAvailable, local, translate =
   const source = lang.split("-")[0];
   let builtin = null;
   if (translate && (translator === "auto" || translator === "builtin")) {
-    try { builtin = await createBuiltinTranslator(source); }
+    try { builtin = await createBuiltinTranslator(source, targetLang.split("-")[0]); }
     catch (err) { report("translator", err.message); }
   }
   const useGroq = translate && groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
@@ -207,7 +207,7 @@ async function startCaptions(lang, translator, groqAvailable, local, translate =
   const writer = generator.writable.getWriter();
   const r = newRecognition(lang);
   if (local) r.processLocally = true;
-  const c = { rec: r, generator, writer, builtin, useGroq, translate, lang, lines: [], live: null,
+  const c = { rec: r, generator, writer, builtin, useGroq, translate, lang, targetLang, lines: [], live: null,
               buffer: "", flushTimer: null, timestamp: 0, liveSeq: 0 };
   cap = c;
 
@@ -326,7 +326,9 @@ function onLiveResult(L, e) {
 }
 
 // stable 까지의 단어 중, 최소 길이를 넘는 마지막 어미 지점을 찾는다. 없으면 -1.
+// 어미 규칙은 한국어 전용이다. 다른 언어는 문장 확정·말 멈춤·최대 대기로만 자른다 (줄바꿈은 조작자가 Shift+Enter).
 function lastBoundary(L, stable) {
+  if (L.korean === false) return -1;
   for (let j = stable; j >= L.emitted + MIN_CHUNK_WORDS; j--) if (BOUNDARY.test(L.words[j - 1])) return j;
   return -1;
 }
@@ -373,7 +375,7 @@ async function startLive(msg) {
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
-  const L = { rec: r, stream, testAudio, maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
+  const L = { rec: r, stream, testAudio, korean: String(msg.lang || "").startsWith("ko"), maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
               lastEmit: performance.now(), lastChange: performance.now() };
   resetLiveSession(L);
   live = L;
@@ -433,7 +435,27 @@ function stopLive() {
 // - 결과는 영어 단어를 빼고, 비슷한 중복·앞부분 반복을 합쳐 새로 늘어난 말만 조각으로 보낸다.
 
 // ── 순차통역 합치기 시작
-function normKo(s) { return s.replace(/[^가-힣0-9]/g, ""); }
+// 통역 언어의 문자 체계. 결과에서 다른 문자로 된 단어(강사 원어가 섞여 든 것)를 빼고, 같은 글자 기준으로 중복을 비교한다.
+// 강사와 통역이 같은 문자를 쓰면(예: 영어 강사 → 스페인어 통역) 문자로는 못 가르므로 인식기가 다른 언어를 무시하는 데 맡긴다.
+const SCRIPT_CLASS = {
+  ko: "\\p{Script=Hangul}",
+  ja: "\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Han}ー",
+  zh: "\\p{Script=Han}",
+  ru: "\\p{Script=Cyrillic}", uk: "\\p{Script=Cyrillic}", mn: "\\p{Script=Cyrillic}",
+  th: "\\p{Script=Thai}", hi: "\\p{Script=Devanagari}", ne: "\\p{Script=Devanagari}", ar: "\\p{Script=Arabic}",
+};
+function scriptClass(lang) { return SCRIPT_CLASS[String(lang || "ko").split("-")[0].toLowerCase()] || "\\p{Script=Latin}"; }
+function makeNorm(lang) {
+  const keep = new RegExp(`[^${scriptClass(lang)}0-9]`, "gu");
+  return (s) => s.replace(keep, "").toLowerCase();
+}
+// 단어에 통역 언어 문자·숫자·기호가 아닌 글자가 있으면 다른 언어 단어로 본다
+function makeForeign(lang) {
+  const other = new RegExp(`[^${scriptClass(lang)}0-9\\s\\p{P}\\p{S}\\p{M}]`, "u");
+  const own = new RegExp(`[${scriptClass(lang)}0-9]`, "u");
+  return (w) => other.test(w) || !own.test(w);
+}
+const normKo = makeNorm("ko");
 
 // 두 문자열의 공통 구간 목록 (difflib.get_matching_blocks 와 같은 방식, 짧은 문자열용)
 function matchingBlocks(a, b) {
@@ -463,29 +485,33 @@ function matchingBlocks(a, b) {
 }
 
 // 단어 목록에서 앞쪽 n 글자(공백·기호 제외)에 해당하는 단어 수. exact 면 정확히 n 에서 끝날 때만.
-function wordsCovering(words, n, exact) {
+function wordsCovering(words, n, exact, norm = normKo) {
   let acc = 0;
   for (let i = 0; i < words.length; i++) {
     if (acc >= n) return exact && acc !== n ? -1 : i;
-    acc += normKo(words[i]).length;
+    acc += norm(words[i]).length;
   }
   return exact && acc !== n ? -1 : words.length;
 }
 
 // 겹쳐 도는 세션들의 결과를 이어 붙인다. add() 는 새로 늘어난 단어만 돌려준다.
 class InterpretMerger {
-  constructor(window = 160, similar = 0.6) { this.words = []; this.window = window; this.similar = similar; }
+  constructor(lang = "ko-KR", window = 160, similar = 0.6) {
+    this.words = []; this.window = window; this.similar = similar;
+    this.norm = makeNorm(lang); this.foreign = makeForeign(lang);
+  }
   add(text) {
-    let words = text.split(/\s+/).filter((w) => w && !/[A-Za-z]/.test(w) && /[가-힣0-9]/.test(w));
-    let nw = normKo(words.join(""));
+    const norm = this.norm;
+    let words = text.split(/\s+/).filter((w) => w && !this.foreign(w));
+    let nw = norm(words.join(""));
     if (nw.length < 2) return [];
-    const tail = normKo(this.words.join("")).slice(-this.window);
+    const tail = norm(this.words.join("")).slice(-this.window);
     // 최근 글의 끝과 새 결과의 앞이 그대로 겹치면("…바로" + "바로 노래라는…") 겹친 앞부분을 뗀다
     let L = 0;
     for (let k = Math.min(tail.length, nw.length); k > 1; k--) if (tail.endsWith(nw.slice(0, k))) { L = k; break; }
     if (L) {
-      const cut = wordsCovering(words, L, true);
-      if (cut >= 0) { words = words.slice(cut); nw = normKo(words.join("")); if (nw.length < 2) return []; }
+      const cut = wordsCovering(words, L, true, norm);
+      if (cut >= 0) { words = words.slice(cut); nw = norm(words.join("")); if (nw.length < 2) return []; }
     }
     // 같은 말을 조금 다르게 받아 적은 중복("불평/불편")이면 겹치지 않는 뒷부분만 붙인다.
     // "그리고 그 백성은 동일한 백성이었습니다" 와 "그 백성은 사실 저였습니다" 처럼 공통 글자("그 백성은", "~습니다")가
@@ -497,7 +523,7 @@ class InterpretMerger {
     if (blocks.length && matched / nw.length >= this.similar && alike >= 0.75) {
       const [ai, bj, k] = blocks[blocks.length - 1];
       if (ai + k >= tail.length - 3 && nw.length - (bj + k) >= 3) {
-        const added = words.slice(wordsCovering(words, bj + k, false));
+        const added = words.slice(wordsCovering(words, bj + k, false, norm));
         this.words.push(...added);
         return added;
       }
@@ -524,7 +550,7 @@ async function startInterpret(msg, stream, testAudio) {
   const dest = ctx.createMediaStreamDestination(); src.connect(delay).connect(dest);
   const delayed = dest.stream.getAudioTracks()[0];
   const buf = new Float32Array(analyser.fftSize);
-  const I = { ctx, stream, testAudio, merger: new InterpretMerger(), sessions: new Set(), timers: [], otherAt: 0, stopped: false };
+  const I = { ctx, stream, testAudio, merger: new InterpretMerger(target), sessions: new Set(), timers: [], otherAt: 0, stopped: false };
   interp = I;
   const session = (lang, continuous, onText, lifeMs) => {
     if (I.stopped) return null;
@@ -546,7 +572,7 @@ async function startInterpret(msg, stream, testAudio) {
     if (I.stopped) return;
     debug("target", text);
     // 원어를 한글로 받아 적은 짧은 결과("씽킹")는 같은 시각에 원어가 인식됐으면 버린다
-    if (normKo(text).length <= 6 && performance.now() - I.otherAt < 2500) { debug("drop-short", text); return; }
+    if (I.merger.norm(text).length <= 6 && performance.now() - I.otherAt < 2500) { debug("drop-short", text); return; }
     const added = I.merger.add(text);
     if (added.length) send({ type: "draft", text: added.join(" "), reason: "final" });
   };
@@ -648,7 +674,7 @@ function connect() {
     switch (msg.cmd || msg.type) {
       case "input_start": startInput(msg.lang, msg.mic, msg.local); break;
       case "input_stop": stopInput(); break;
-      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local, msg.translate); break;
+      case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local, msg.translate, msg.target_lang || "ko-KR"); break;
       case "captions_stop": stopCaptions(); break;
       case "live_start": startLive(msg); break;
       case "live_stop": stopLive(); break;

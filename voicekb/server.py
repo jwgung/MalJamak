@@ -21,6 +21,11 @@ from .testsource import TestSource
 from .paste import Paster
 
 
+def _base(code: str) -> str:
+    """언어 코드의 앞부분 (ko-KR → ko). 같은 언어인지 비교할 때 쓴다."""
+    return str(code or "").split("-")[0].lower()
+
+
 class Hub:
     def __init__(self, config: Config, dry_run: bool = False):
         self.config = config
@@ -165,7 +170,7 @@ class Hub:
             full = self.config.get()
             cfg = full["input"]
             if self.groq and cfg["groq_correct"]:
-                text = await self.groq.correct(text, cfg["correction"], full["glossary"]) or text
+                text = await self.groq.correct(text, cfg["correction"], full["glossary"], cfg["lang"]) or text
             await self._paste_gate.wait()
             if self._pasted_once:
                 text = cfg["separator"] + text
@@ -198,8 +203,9 @@ class Hub:
             await self._send(self.engine, {
                 "cmd": "captions_start",
                 "lang": cfg["lang"],
-                # 원어가 한국어면 번역하지 않는다
-                "translate": bool(cfg["translate"]) and not cfg["lang"].startswith("ko"),
+                # 말하는 언어와 번역할 언어가 같으면 번역하지 않는다
+                "translate": bool(cfg["translate"]) and _base(cfg["lang"]) != _base(cfg["target_lang"]),
+                "target_lang": cfg["target_lang"],
                 "local": cfg["engine"] == "local",
                 "translator": translator,
                 "groq": self.groq is not None,
@@ -288,7 +294,9 @@ class Hub:
         if not self.live_on:
             return
         cfg = self.config.get()["live"]
-        chunk, prev_changed = self.live.add_draft(text, cfg["review"], cfg["countdown"], reason, cfg["auto_break"])
+        # 자동 줄바꿈 추측은 한국어 어미·접속어 규칙이라 자막 언어가 한국어일 때만 쓴다 (다른 언어는 Shift+Enter)
+        auto_break = cfg["auto_break"] and _base(cfg["lang"]) == "ko"
+        chunk, prev_changed = self.live.add_draft(text, cfg["review"], cfg["countdown"], reason, auto_break)
         if chunk:
             # 앞 조각에 문장부호가 붙었고 이미 나간 조각이면 자막 화면도 갱신한다.
             await self.broadcast_live(display=prev_changed)
@@ -348,7 +356,8 @@ class Hub:
         ko = ""
         if self.groq:
             cfg = self.config.get()
-            ko = await self.groq.translate(source, cfg["live"]["other_lang"], [], cfg["glossary"]) or ""
+            # 강사 원어 → 자막 언어(통역 언어)
+            ko = await self.groq.translate(source, cfg["live"]["other_lang"], [], cfg["glossary"], cfg["live"]["lang"]) or ""
         self.live.add_suggestion(ko, source, after_id)
         await self.broadcast_live(display=False)
 
@@ -392,7 +401,7 @@ class Hub:
         if not self.groq:
             return
         ko = await self.groq.translate(data.get("text", ""), data.get("source", ""), data.get("context") or [],
-                                       self.config.get()["glossary"])
+                                       self.config.get()["glossary"], data.get("target") or "ko-KR")
         if ko:
             await self._send(ws, {"type": "translation", "id": data.get("id"), "ko": ko})
 
@@ -636,6 +645,7 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
     app.router.add_get("/settings", lambda r: web.FileResponse(web_dir / "settings.html"))
     app.router.add_get("/operator", lambda r: web.FileResponse(web_dir / "operator.html"))
     app.router.add_get("/ui.css", lambda r: web.FileResponse(web_dir / "ui.css"))
+    app.router.add_get("/langs.js", lambda r: web.FileResponse(web_dir / "langs.js"))
     app.router.add_get("/display", lambda r: web.FileResponse(web_dir / "display.html"))
     app.router.add_post("/live/toggle", toggle_handler)
     app.router.add_get("/live/test-audio", test_audio)

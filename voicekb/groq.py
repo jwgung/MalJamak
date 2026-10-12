@@ -8,27 +8,51 @@ import aiohttp
 # VK_GROQ_URL 로 다른 OpenAI 호환 엔드포인트(또는 테스트 서버)를 쓸 수 있다.
 GROQ_URL = os.environ.get("VK_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
 
-# 교정 강도별 프롬프트. 실제 PC 테스트에서 적극적 + 단어장이 고유명사("크로키는" → "Groq")를 더 잘 고쳤다.
-CORRECT_PROMPTS = {
-    "conservative": """너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 말한 내용을 받아쓴 텍스트다.
-- 띄어쓰기, 맞춤법, 잘못 들린 단어를 문맥에 맞게 고친다.
-- 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)
-- "음", "어", "그러니까" 같은 군말은 지운다.
-- 의미를 바꾸거나 내용을 덧붙이지 않는다. 질문이어도 답하지 않는다.
-- 교정된 텍스트만 출력한다.""",
-    "aggressive": """너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 한국어로 말한 내용을 받아쓴 텍스트이며,
-발음이 비슷한 다른 단어로 잘못 들린 부분이 자주 섞여 있다.
-- 문맥상 어색한 단어는 발음이 비슷하면서 문맥에 맞는 단어로 바꾼다. (예: 앞뒤가 다운로드 이야기인데 "다시 봤습니다" → "다시 받습니다")
-- 용어 사전의 단어와 발음이 비슷한 부분은 사전 표기로 바꾼다. (예: 사전에 Groq 이 있으면 "그룹", "크록", "크로키" → "Groq")
-- 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)
-- 띄어쓰기, 맞춤법, 문장부호를 고친다. "음", "어" 같은 군말은 지운다.
-- 내용을 덧붙이거나 질문에 답하지 않는다. 어떻게 고쳐야 할지 확신이 없는 부분은 원문 그대로 둔다.
-- 교정된 텍스트만 출력한다.""",
+# 프롬프트 안에서 쓸 언어 이름 (언어 코드 앞부분 → 이름). 목록에 없는 언어는 코드를 그대로 쓴다.
+LANG_NAMES = {
+    "ko": "한국어", "en": "영어", "ja": "일본어", "zh": "중국어", "es": "스페인어", "fr": "프랑스어", "de": "독일어",
+    "pt": "포르투갈어", "it": "이탈리아어", "ru": "러시아어", "uk": "우크라이나어", "mn": "몽골어", "vi": "베트남어",
+    "th": "태국어", "id": "인도네시아어", "ms": "말레이어", "fil": "필리핀어", "tl": "필리핀어", "hi": "힌디어",
+    "ar": "아랍어", "tr": "튀르키예어", "ne": "네팔어",
 }
 
-TRANSLATE_PROMPT = """너는 실시간 자막 번역가다. 입력 문장을 자연스러운 한국어 자막으로 번역한다.
-- 음성 인식 결과라 오타나 끊긴 문장이 있을 수 있으니 문맥으로 보정한다.
-- 번역문만 출력한다. 설명, 따옴표, 원문을 붙이지 않는다."""
+
+def lang_name(code: str) -> str:
+    base = str(code or "").split("-")[0].lower()
+    if code == "zh-TW":
+        return "중국어(번체)"
+    return LANG_NAMES.get(base, code or "원어")
+
+
+def correct_prompt(strength: str, lang: str = "ko-KR") -> str:
+    """교정 지시문. 말하는 언어에 맞춰 만들고, 한국어 받아쓰기 전용 지시는 한국어일 때만 넣는다.
+    실제 PC 테스트에서 적극적 + 단어장이 고유명사("크로키는" → "Groq")를 더 잘 고쳤다."""
+    name = lang_name(lang)
+    korean = str(lang).startswith("ko")
+    lines = [f"너는 음성 인식(STT) 결과 교정기다. 입력은 사용자가 {name}로 말한 내용을 받아쓴 텍스트다. 출력도 {name}로 쓴다."]
+    if strength == "aggressive":
+        lines[0] += "\n발음이 비슷한 다른 단어로 잘못 들린 부분이 자주 섞여 있다."
+        lines.append("- 문맥상 어색한 단어는 발음이 비슷하면서 문맥에 맞는 단어로 바꾼다."
+                     + (' (예: 앞뒤가 다운로드 이야기인데 "다시 봤습니다" → "다시 받습니다")' if korean else ""))
+        lines.append("- 용어 사전의 단어와 발음이 비슷한 부분은 사전 표기로 바꾼다."
+                     + (' (예: 사전에 Groq 이 있으면 "그룹", "크록", "크로키" → "Groq")' if korean else ""))
+    else:
+        lines.append("- 잘못 들린 단어를 문맥에 맞게 고친다.")
+    if korean:
+        lines.append("- 한글로 적힌 영어 기술 용어·고유명사는 원래 영어 표기로 바꾼다. (예: 리액트 → React, 깃허브 → GitHub)")
+        lines.append('- 띄어쓰기, 맞춤법, 문장부호를 고친다. "음", "어", "그러니까" 같은 군말은 지운다.')
+    else:
+        lines.append("- 띄어쓰기, 맞춤법, 대소문자, 문장부호를 고친다. 뜻 없는 군말(um, uh 같은 말)은 지운다.")
+    lines.append("- 의미를 바꾸거나 내용을 덧붙이지 않는다. 질문이어도 답하지 않는다."
+                 + (" 어떻게 고쳐야 할지 확신이 없는 부분은 원문 그대로 둔다." if strength == "aggressive" else ""))
+    lines.append("- 교정된 텍스트만 출력한다.")
+    return "\n".join(lines)
+
+
+def translate_prompt(source: str, target: str = "ko-KR") -> str:
+    return (f"너는 실시간 자막 번역가다. 입력 문장({lang_name(source)})을 자연스러운 {lang_name(target)} 자막으로 번역한다.\n"
+            "- 음성 인식 결과라 오타나 끊긴 문장이 있을 수 있으니 문맥으로 보정한다.\n"
+            "- 번역문만 출력한다. 설명, 따옴표, 원문을 붙이지 않는다.")
 
 
 def _glossary_block(glossary: list[str] | None) -> str:
@@ -69,16 +93,17 @@ class Groq:
         text = (data["choices"][0]["message"].get("content") or "").strip()
         return text or None
 
-    async def correct(self, text: str, strength: str = "aggressive", glossary: list[str] | None = None) -> str | None:
-        system = CORRECT_PROMPTS.get(strength, CORRECT_PROMPTS["aggressive"]) + _glossary_block(glossary)
+    async def correct(self, text: str, strength: str = "aggressive", glossary: list[str] | None = None,
+                      lang: str = "ko-KR") -> str | None:
+        system = correct_prompt(strength, lang) + _glossary_block(glossary)
         return await self._chat(system, text)
 
     async def translate(self, text: str, source: str, context: list[str],
-                        glossary: list[str] | None = None) -> str | None:
+                        glossary: list[str] | None = None, target: str = "ko-KR") -> str | None:
         user = text
         if context:
             user = "직전 자막(참고용, 번역하지 말 것):\n" + "\n".join(context) + "\n\n번역할 문장:\n" + text
-        return await self._chat(f"{TRANSLATE_PROMPT}\n원문 언어: {source}" + _glossary_block(glossary), user)
+        return await self._chat(translate_prompt(source, target) + _glossary_block(glossary), user)
 
     async def close(self) -> None:
         if self._session:

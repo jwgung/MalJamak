@@ -37,4 +37,14 @@ check("앞부분만 같은 다른 문장은 중복이 아님 (실제 사례)",
 check("새 문장은 그대로 이어 붙임",
   run(["아 제가 초청을 받아서 한국에 왔는데요", "우리 김상아 목사님 초청해 주셨습니다"]),
   ["아 제가 초청을 받아서 한국에 왔는데요", "우리 김상아 목사님 초청해 주셨습니다"]);
+// 통역 언어가 한국어가 아닐 때: 그 언어의 문자 기준으로 거른다
+const runLang = (lang, texts) => { const m = new InterpretMerger(lang); return texts.map((t) => m.add(t).join(" ")); };
+check("영어 통역(한국어 강사): 섞여 든 한국어 단어는 빼고 영어만",
+  runLang("en-US", ["저는 Welcome to Korea everyone", "Welcome to Korea everyone today"]),
+  ["Welcome to Korea everyone", "today"]);
+check("영어 통역: 대소문자만 다른 중복은 버림",
+  runLang("en-US", ["God's grace is the same for everyone", "god's grace is the same for everyone"]),
+  ["God's grace is the same for everyone", ""]);
+check("일본어 통역: 한자·가나는 남기고 영어는 뺌",
+  runLang("ja-JP", ["今日は ローマ書 8章を 見ます hello"]), ["今日は ローマ書 8章を 見ます"]);
 process.exit(fail ? 1 : 0);

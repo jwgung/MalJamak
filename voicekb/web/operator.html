@@ -159,8 +159,8 @@
         <option value="normal">일반</option>
         <option value="interpret">순차통역 (한국어만)</option>
       </select>
-      <label class="field" id="otherWrap" hidden><span>강사 언어</span>
-        <select id="otherLang"><option value="en-US">English</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select></label>
+      <label class="field" id="otherWrap" hidden><span>강사 언어 (원어)</span>
+        <select id="otherLang"></select></label>
     </section>
     <section>
       <div class="section-title">검토</div>
@@ -179,7 +179,8 @@
       <div class="section-title">소리</div>
       <label class="field"><span>소리 입력 (믹서 출력·마이크)</span><select id="mic"><option value="">기본 마이크</option></select></label>
       <div class="two">
-        <label class="field"><span>언어</span><select id="lang"><option value="ko-KR">한국어</option><option value="en-US">English</option><option value="ja-JP">日本語</option></select></label>
+        <label class="field"><span id="langLabel">자막 언어</span><select id="lang"></select>
+          <small id="langNote" class="hint" hidden>한국어가 아니면 말이 멈출 때·최대 대기 시간에만 자르고, 줄바꿈은 Shift+Enter 로 합니다 (어미 규칙·자동 줄바꿈은 한국어 전용).</small></label>
         <label class="field"><span>인식 방식</span><select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option></select></label>
       </div>
       <label class="field"><span>통화용 보정 (잡음 제거·자동 음량)</span><select id="processing"><option value="false">끄기 — 믹서 직결</option><option value="true">켜기 — 공간 마이크</option></select></label>
@@ -230,6 +231,7 @@
   </div>
 </div>
 
+<script src="/langs.js"></script>
 <script>
 const $ = (id) => document.getElementById(id);
 let ws = null;
@@ -349,6 +351,7 @@ function renderHeader() {
   $("pendingCount").textContent = nPending ? `검토 대기 ${nPending}` : "검토 대기";
   if (document.activeElement !== $("review")) $("review").value = status.review;
   if (document.activeElement !== $("mode")) $("mode").value = status.mode || "normal";
+  updateLangNotes();
   $("otherWrap").hidden = $("mode").value !== "interpret";
   $("mode").disabled = $("otherLang").disabled = !!status.live;  // 방식은 시작 전에 정한다
   syncSeg("mode"); syncSeg("review");
@@ -542,7 +545,8 @@ function tick() {
 async function loadSettings() {
   const { settings } = await (await fetch("/api/settings")).json();
   const l = settings.live;
-  $("lang").value = l.lang; $("engine").value = l.engine; $("otherLang").value = l.other_lang; $("processing").value = String(l.voice_processing);
+  fillLangSelect($("lang"), l.lang); fillLangSelect($("otherLang"), l.other_lang); $("engine").value = l.engine;
+  updateLangNotes(); $("processing").value = String(l.voice_processing);
   $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines; $("autobreak").value = String(l.auto_break);
   try {
     const { mics } = await (await fetch("/api/sources")).json();
@@ -558,11 +562,20 @@ async function save(patch) {
 }
 
 $("review").onchange = () => save({ review: $("review").value });
-$("mode").onchange = () => { $("otherWrap").hidden = $("mode").value !== "interpret"; save({ mode: $("mode").value }); };
+$("mode").onchange = () => { $("otherWrap").hidden = $("mode").value !== "interpret"; updateLangNotes(); save({ mode: $("mode").value }); };
 $("otherLang").onchange = () => save({ other_lang: $("otherLang").value });
 $("countdown").onchange = () => save({ countdown: Number($("countdown").value) });
 $("mic").onchange = () => save({ mic: $("mic").value });
-$("lang").onchange = () => save({ lang: $("lang").value });
+$("lang").onchange = () => { updateLangNotes(); save({ lang: $("lang").value }); };
+
+// 자막(통역) 언어에 따라 안내를 바꾼다: 순차통역이면 "통역 언어", 한국어가 아니면 한국어 전용 기능 안내
+function updateLangNotes() {
+  const korean = isKorean($("lang").value);
+  $("langLabel").textContent = $("mode").value === "interpret" ? "통역 언어 (통역사가 말하는 언어)" : "자막 언어";
+  $("langNote").hidden = korean;
+  $("autobreak").disabled = !korean;
+  if (!korean) $("autobreak").title = "자동 줄바꿈은 한국어 전용입니다";
+}
 $("engine").onchange = () => save({ engine: $("engine").value });
 $("processing").onchange = () => save({ voice_processing: $("processing").value === "true" });
 $("pause").onchange = () => save({ pause_seconds: Number($("pause").value) });

@@ -56,4 +56,14 @@ check("어미에서 자름", sent[0] === "땀도 흘리고 올라갈 때 쉽지�
 clock = 1900; evaluateLive(L);
 check("쉼에서 나머지 내보냄", sent.join(" ").endsWith("근데 높은"));
 
+// 한국어가 아니면 어미 규칙으로 자르지 않는다 (말 멈춤·최대 대기로만)
+L = fresh();
+L.korean = false;
+onLiveResult(L, ev([], ["they started singing and then"]));
+clock = 900; onLiveResult(L, ev([], ["they started singing and then they started to"]));
+clock = 1100; onLiveResult(L, ev([], ["they started singing and then they started to complain"]));
+check("한국어가 아니면 말이 이어지는 동안 자르지 않음", sent.length === 0);
+clock = 1900; evaluateLive(L);
+check("한국어가 아니어도 말이 멈추면 내보냄", sent.join(" ") === "they started singing and then they started to complain");
+
 process.exit(fail ? 1 : 0);

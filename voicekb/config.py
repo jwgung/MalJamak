@@ -25,7 +25,8 @@ DEFAULTS: dict = {
     },
     "captions": {  # PC 소리 자막: 회의·강의·통화 소리를 내 화면 위 자막 창으로 (개인용, 검토 없음)
         "lang": "ko-KR",
-        "translate": False,  # True 면 한국어로 번역 (원어가 외국어일 때)
+        "translate": False,  # True 면 target_lang 으로 번역 (말하는 언어와 다를 때)
+        "target_lang": "ko-KR",  # 번역해서 보여 줄 언어 (예: 한국어 설교 → 영어 자막이면 en-US)
         "engine": "cloud",
         "source": "loopback",  # loopback: 기본 스피커 출력, 그 외: 입력 장치 이름 (BlackHole 등)
         "translator": "auto",  # 번역할 때: auto(내장 번역 → Groq), builtin, groq
@@ -33,7 +34,7 @@ DEFAULTS: dict = {
         "opacity": 0.85,
     },
     "live": {  # 현장 자막: 마이크 → 조각 → 조작자 검토 → 자막 화면
-        "lang": "ko-KR",
+        "lang": "ko-KR",  # 자막 언어 (순차통역 모드에서는 통역사가 말하는 언어)
         # normal: 한 언어 그대로. interpret: 순차통역(강사 원어와 통역 한국어가 번갈아 나옴)에서 한국어만 받는다
         "mode": "normal",
         "other_lang": "en-US",  # 순차통역 모드에서 강사가 쓰는 원어 (교정 화면 참고용으로도 인식)
@@ -48,7 +49,7 @@ DEFAULTS: dict = {
         "stable_seconds": 0.8,  # 이 시간 동안 바뀌지 않은 단어만 안정된 것으로 본다
         "font_size": 56,
         "lines": 2,  # 방송 자막 관례상 2줄
-        "auto_break": False,  # 자동 줄바꿈(실험): 다음 조각이 오면 앞뒤 문맥으로 문장 경계를 추측. 기본은 조작자가 Shift+Enter
+        "auto_break": False,  # 자동 줄바꿈(실험, 한국어 전용): 다음 조각이 오면 앞뒤 문맥으로 문장 경계를 추측. 기본은 조작자가 Shift+Enter
     },
     "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
     "glossary": [],  # 자주 쓰는 고유명사·용어. Groq 교정·번역에 넘긴다.
