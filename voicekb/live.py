@@ -81,8 +81,10 @@ class LiveSession:
     _seq: int = 0
     _file: Path | None = None
     started: datetime | None = None
+    paused: bool = False  # 전체 일시정지: 자동 내보내기 카운트다운을 모두 멈춘다 (조작자가 틀린 것을 고치는 동안)
 
     def start(self) -> None:
+        self.paused = False
         self.items.clear()
         self.started = datetime.now()
         self._file = None
@@ -216,10 +218,39 @@ class LiveSession:
             if c.status == "pending" and c.kind != "suggest":  # 번역 제안은 늘 조작자가 확인
                 c.deadline = now + countdown if review == "auto" else None
 
+    def set_paused(self, paused: bool, countdown: float) -> None:
+        """멈추면 아무것도 저절로 나가지 않는다. 다시 흐르게 하면 대기 조각들이 카운트다운을 새로 시작한다
+        (멈춘 동안 기한이 지난 조각들이 한꺼번에 나가지 않게)."""
+        if self.paused == paused:
+            return
+        self.paused = paused
+        if not paused:
+            now = time.time()
+            for c in self.items:
+                if c.status == "pending" and c.deadline is not None:
+                    c.deadline = now + countdown
+
     def due(self) -> list[Chunk]:
+        if self.paused:
+            return []
         now = time.time()
         return [c for c in self.items
                 if c.status == "pending" and not c.editing and c.deadline is not None and c.deadline <= now]
+
+    def send_upto(self, chunk_id: int, text: str | None = None) -> int:
+        """이 조각과 그 위(목록 앞쪽)의 대기 조각을 모두 내보낸다 — 밀렸을 때 훑어보고 한 번에 처리.
+        번역 제안은 하나씩 확인해야 하므로 빼되, 조작자가 고른 그 조각이면 내보낸다. 내보낸 개수를 돌려준다."""
+        index = next((i for i, c in enumerate(self.items) if c.id == chunk_id), None)
+        if index is None:
+            return 0
+        count = 0
+        for c in self.items[:index]:
+            if c.status == "pending" and c.kind != "suggest" and self.send(c.id):
+                count += 1
+        target = self.items[index]
+        if target.status == "pending" and self.send(target.id, text):
+            count += 1
+        return count
 
     def send_all_pending(self) -> int:
         # 번역 제안은 조작자가 하나씩 확인해야 하므로 "모두 내보내기"에서 뺀다

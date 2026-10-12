@@ -130,6 +130,7 @@
   <span id="state" class="chip"><i class="dot"></i><span id="stateText">대기</span></span>
   <span id="counts"></span>
   <span class="spacer"></span>
+  <button id="btnPause" class="btn" hidden title="자동 내보내기를 모두 멈춥니다 (Ctrl+Space)">⏸ 멈춤</button>
   <button id="btnLive" class="btn lg primary">자막 시작</button>
   <button id="btnDisplay" class="btn">자막 화면 열기</button>
   <button id="btnHelp" class="btn ghost icon" title="단축키">?</button>
@@ -224,7 +225,8 @@
       <dt><kbd>Shift</kbd>+<kbd>Enter</kbd></dt><dd>내보내고 줄바꿈 (나간 조각에서는 줄바꿈 켜기/끄기)</dd>
       <dt><kbd>Esc</kbd></dt><dd>버리기</dd>
       <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>조각 이동</dd>
-      <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>대기 중 모두 내보내기</dd>
+      <dt><kbd>Ctrl</kbd>+<kbd>Enter</kbd></dt><dd>여기까지 내보내기 — 이 조각과 그 위의 대기 조각을 모두 (번역 제안은 빼고)</dd>
+      <dt><kbd>Ctrl</kbd>+<kbd>Space</kbd></dt><dd>자동 내보내기 전체 멈춤 / 다시 흐르기 — 틀린 것을 고치는 동안</dd>
       <dt><kbd>Insert</kbd></dt><dd>이 조각 뒤에 직접 입력</dd>
     </dl>
     <p class="hint note"><span class="sw"></span>보라색 조각은 강사 원어의 기계 번역 제안입니다. 확인해야 나갑니다.</p>
@@ -346,6 +348,15 @@ function renderHeader() {
   $("stateText").textContent = status.live ? `인식 중 · ${status.live_test ? "테스트 영상" : "마이크"}${status.mode === "interpret" ? " · 순차통역" : ""}`
                          : status.engine ? "대기" : "엔진 준비 중…";
   $("state").className = status.live ? "chip live" : status.engine ? "chip" : "chip warn";
+  // 전체 일시정지: 자동 내보내기 중에만 쓸 수 있다. 멈춘 동안은 버튼과 상태 칩을 눈에 띄게.
+  const canPause = status.live && status.review === "auto";
+  $("btnPause").hidden = !canPause;
+  $("btnPause").textContent = status.paused ? "▶ 다시 흐르기" : "⏸ 멈춤";
+  $("btnPause").className = status.paused ? "btn primary" : "btn";
+  if (status.live && status.paused) {
+    $("stateText").textContent += " · 멈춤";
+    $("state").className = "chip warn";
+  }
   const nPending = items.filter((i) => i.status === "pending").length, nSent = items.filter((i) => i.status === "sent").length;
   $("counts").innerHTML = `대기 <b>${nPending}</b> · 나감 <b>${nSent}</b>`;
   $("pendingCount").textContent = nPending ? `검토 대기 ${nPending}` : "검토 대기";
@@ -387,7 +398,7 @@ function makeRow(item) {
   acts.append(sendBtn, dropBtn);
   const kbdhint = document.createElement("div");
   kbdhint.className = "kbdhint";
-  kbdhint.innerHTML = "<kbd>Enter</kbd> 내보내기 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기";
+  kbdhint.innerHTML = "<kbd>Enter</kbd> 내보내기 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기";
   el.append(input, brkmark, bar, meta, acts, kbdhint);
 
   let editing = false;
@@ -399,7 +410,17 @@ function makeRow(item) {
     if (editing) { editing = false; send({ cmd: "update", id: item.id, text: input.value }); }
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAll(); return; }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      // 여기까지 한 번에: 이 조각(고친 내용 포함)과 그 위의 대기 조각을 모두 내보낸다
+      e.preventDefault();
+      const cur = rows.get(item.id).item;
+      if (cur.status === "pending") {
+        editing = false;
+        send({ cmd: "send_upto", id: item.id, text: input.value });
+        moveFocus(1, true);
+      } else sendAll();
+      return;
+    }
     if (e.key === "Enter" && e.shiftKey) {
       e.preventDefault();
       const cur = rows.get(item.id).item;
@@ -533,6 +554,7 @@ function tick() {
   for (const row of rows.values()) {
     const item = row.item;
     if (!item || item.status !== "pending" || item.remaining == null || item.editing) continue;
+    if (status.paused) { row.meta.textContent = "멈춤"; continue; }  // 전체 일시정지 중엔 막대를 멈춘다
     const left = Math.max(0, item.remaining - elapsed);
     row.bar.style.width = `${(left / total) * 100}%`;
     row.meta.textContent = `${left.toFixed(1)}초`;
@@ -604,9 +626,15 @@ $("btnTestLoad").onclick = () => {
 };
 $("testListen").onchange = () => { $("testPlayer").muted = !$("testListen").checked; };
 $("btnAll").onclick = sendAll;
+function togglePause() {
+  if (status.live && status.review === "auto") send({ cmd: "pause", on: !status.paused });
+}
+$("btnPause").onclick = togglePause;
 $("btnDisplay").onclick = () => fetch("/live/display-window", { method: "POST" });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.target.classList?.contains("text")) { e.preventDefault(); sendAll(); }
+  // 전체 일시정지 — 조각을 고치는 중에도(입력칸 안에서도) 쓸 수 있게 문서 전체에서 받는다
+  if ((e.code === "Space" || e.key === " ") && (e.ctrlKey || e.metaKey)) { e.preventDefault(); togglePause(); }
 });
 
 // 설정 패널 열림/닫힘을 기억한다

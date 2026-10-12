@@ -272,7 +272,7 @@ class Hub:
         cfg = self.config.get()["live"]
         return {"live": self.live_on, "live_test": self.live_test, "test": self.test.view(), "mode": cfg["mode"],
                 "test_audio": f"/live/test-audio?f={self.test.path.name}" if self.test.path else None,
-                "engine": self.engine is not None, "review": cfg["review"],
+                "engine": self.engine is not None, "review": cfg["review"], "paused": self.live.paused,
                 "countdown": cfg["countdown"], "transcript": str(self.live.transcript_path()) if self.live.started else "",
                 "last_error": self.last_error}
 
@@ -333,6 +333,10 @@ class Hub:
             self.live.set_editing(chunk_id, bool(data.get("on")), cfg["countdown"])
         elif cmd == "send_all":
             changed_display = self.live.send_all_pending() > 0
+        elif cmd == "send_upto":
+            changed_display = self.live.send_upto(chunk_id, data.get("text")) > 0
+        elif cmd == "pause":
+            self.live.set_paused(bool(data.get("on")), cfg["countdown"])
         elif cmd == "start":
             await self.set_live(True, bool(data.get("test")), data.get("offset") or 0)
             return

@@ -1,6 +1,7 @@
 """현장 자막 세션 테스트: python -m unittest discover tests"""
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -98,6 +99,44 @@ class FillGapsTest(unittest.TestCase):
         self.assertFalse(self.live.send(s.id))
         self.assertTrue(self.live.send(s.id, "조작자가 쓴 통역"))
         self.assertEqual(s.text, "조작자가 쓴 통역")
+
+
+class OperatorPaceTest(unittest.TestCase):
+    """조작자가 속도를 따라가게 돕는 기능: 전체 일시정지, 여기까지 내보내기."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.live = LiveSession(Path(self.tmp.name))
+        self.live.start()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pause_stops_auto_send_and_resume_restarts_countdown(self):
+        a, _ = self.live.add_draft("하나", "auto", 0)  # 기한이 바로 지난 조각
+        self.live.set_paused(True, 3)
+        self.assertEqual(self.live.due(), [])
+        self.live.set_paused(False, 3)
+        self.assertEqual(self.live.due(), [])  # 다시 흐르면 카운트다운을 새로 시작 (바로 나가지 않음)
+        self.assertGreater(a.deadline, time.time() + 2)
+
+    def test_send_upto_sends_this_and_earlier_pending(self):
+        a, _ = self.live.add_draft("하나", "manual", 3)
+        b, _ = self.live.add_draft("둘", "manual", 3)
+        c, _ = self.live.add_draft("셋", "manual", 3)
+        d, _ = self.live.add_draft("넷", "manual", 3)
+        self.assertEqual(self.live.send_upto(c.id, "셋 (고침)"), 3)
+        self.assertEqual([x.status for x in (a, b, c, d)], ["sent", "sent", "sent", "pending"])
+        self.assertEqual(c.text, "셋 (고침)")
+
+    def test_send_upto_skips_suggestions_unless_chosen(self):
+        a, _ = self.live.add_draft("하나", "manual", 3)
+        s = self.live.add_suggestion("번역 제안", "source", after_id=a.id)
+        b, _ = self.live.add_draft("둘", "manual", 3)
+        self.live.send_upto(b.id)
+        self.assertEqual((a.status, s.status, b.status), ("sent", "pending", "sent"))
+        self.assertEqual(self.live.send_upto(s.id), 1)  # 제안을 직접 고르면 나간다
+        self.assertEqual(s.status, "sent")
 
 
 class AutoSentenceBreakTest(unittest.TestCase):
