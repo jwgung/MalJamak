@@ -40,6 +40,7 @@ VK_GROQ_URL=http://127.0.0.1:8797/v1/chat/completions \
 | `interp_run.py` | `interp_run.py <유튜브 URL> <초> <out.json>` — 교정 화면 역할로 붙어 테스트 소리를 불러와 3:00 부터 순차통역 자막을 돌리고 조각·원어 줄을 저장 |
 | `score_live.py` | `score_live.py <out.json> <자막.json3> <시작초> <끝초> [-v]` — 결과를 유튜브 자동 자막과 비교(한글 일치율) |
 | `live_client.py` | 현장 자막 자동/승인 흐름 시험(조각 크기·간격, 수정·버리기·나간 뒤 수정) |
+| `op_pace.js` | 교정 화면에 `cdp_eval.py` 로 주입 — 시작 → `Ctrl+Space` 멈춤(나간 수가 그대로인지) → 대기 3번째에서 `Ctrl+Enter`(+3 나가는지) → 다시 흐르기 확인 |
 | `compare_captions.py` | Chrome 인식 로그(FINAL 줄)와 유튜브 자막의 일치율·다른 구간 목록 |
 
 유튜브 자동 자막(비교 기준)은 yt-dlp 로 받는다:
