@@ -43,7 +43,8 @@ DEFAULTS: dict = {
         "max_wait_seconds": 4.0,  # 자를 지점이 없어도 이 시간이 지나면 자른다
         "stable_seconds": 0.8,  # 이 시간 동안 바뀌지 않은 단어만 안정된 것으로 본다
         "font_size": 56,
-        "lines": 3,
+        "lines": 2,  # 방송 자막 관례상 2줄
+        "auto_break": False,  # 자동 줄바꿈(실험): 다음 조각이 오면 앞뒤 문맥으로 문장 경계를 추측. 기본은 조작자가 Shift+Enter
     },
     "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
     "glossary": [],  # 자주 쓰는 고유명사·용어. Groq 교정·번역에 넘긴다.

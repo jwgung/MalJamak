@@ -6,12 +6,55 @@ review 방식
 고치기 시작하면(editing) 카운트다운이 멈춘다. 이미 내보낸 조각도 고칠 수 있고, 자막 화면에 그대로 반영된다.
 """
 
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 KEEP_ITEMS = 200  # 교정 화면에 보여줄 최근 조각 수
+
+# ───────── 문장 경계 ─────────
+# Chrome 은 한국어 결과에 문장부호를 넣지 않는다. 조각은 나오는 즉시 내보내되, 다음 조각이 왔을 때
+# 앞뒤 문맥으로 "앞 조각이 문장 끝이었나"를 정한다. 줄바꿈은 다음 조각이 화면에 나올 때만 필요하므로
+# 한 조각 늦게 판단해도 지연이 없다.
+
+_QUESTION_END = re.compile(r"(까|까요|나요|죠|니)$")
+_SENTENCE_END = re.compile(r"(니다|어요|아요|에요|예요|세요|해요|래요|네요|군요|지요|거든요|다|요)$")
+_CONTINUES = re.compile(r"(고|며|서|는데|은데|인데|지만|니까|면|면요|면서|도록|려고|는|은|을|를|이|가|의|에|에서|으로|로|와|과|도|만|한|할|된|될|던|하는|있는)$")
+_NEW_SENTENCE_START = re.compile(
+    r"^(그래서|그런데|근데|그리고|하지만|그러나|그러니까|그러므로|그러면|그럼|그렇지만|또|또한|자|이제|여러분|아멘|할렐루야|네|예|아니요|제가|저는|우리가|오늘)(\s|$)")
+_CONTINUATION_START = re.compile(r"^(을|를|이|가|은|는|에|에서|으로|로|와|과|도|만|의|하는|되는|있는|통하여|통해|때문에|것)(\s|$)")
+_PUNCT_END = ".?!。？！…"
+
+
+def sentence_break(prev_text: str, prev_reason: str, gap: float, next_text: str) -> str | None:
+    """앞 조각 뒤가 문장 경계면 붙일 문장부호("." "?" 또는 "" = 부호 없이 줄만 바꿈)를, 아니면 None."""
+    prev, nxt = prev_text.strip(), next_text.strip()
+    if not prev:
+        return None
+    if prev[-1] in _PUNCT_END:  # 조작자가 직접 찍은 부호
+        return ""
+    last = prev.split()[-1]
+    score = 0
+    question = bool(_QUESTION_END.search(last))
+    ending = question or bool(_SENTENCE_END.search(last)) and not last.endswith("면요")
+    if ending:
+        score += 2
+    elif _CONTINUES.search(last):
+        score -= 3
+    score += {"final": 1, "pause": 1}.get(prev_reason, 0)
+    if gap >= 1.5:
+        score += 1
+    if _NEW_SENTENCE_START.search(nxt):
+        score += 1
+    elif _CONTINUATION_START.search(nxt):
+        score -= 2
+    if score < 2:
+        return None
+    if not ending:
+        return ""  # 문장이 끝난 것 같지만 어미가 애매하면 부호 없이 줄만 바꾼다
+    return "?" if question else "."
 
 
 @dataclass
@@ -24,6 +67,9 @@ class Chunk:
     editing: bool = False
     sent_at: float | None = None
     edited: bool = False
+    reason: str = ""  # 엔진이 이 조각을 자른 이유 (final | pause | boundary | max)
+    newline: bool = False  # 자동 줄바꿈(실험)이 이 조각을 새 줄에서 시작하게 함
+    break_after: bool = False  # 조작자가 이 조각 뒤에서 줄을 바꿈 (Shift+Enter)
 
 
 @dataclass
@@ -41,17 +87,30 @@ class LiveSession:
 
     # ───────── 조각 ─────────
 
-    def add_draft(self, text: str, review: str, countdown: float) -> Chunk | None:
+    def add_draft(self, text: str, review: str, countdown: float, reason: str = "",
+                  auto_break: bool = False) -> tuple[Chunk | None, bool]:
+        """조각을 추가한다. auto_break 면 앞 조각의 문장 경계도 정한다. (새 조각, 이미 나간 앞 조각이 바뀌었는지)"""
         text = " ".join(text.split())
         if not text:
-            return None
+            return None, False
         self._seq += 1
         now = time.time()
-        chunk = Chunk(id=self._seq, text=text, created=now,
+        chunk = Chunk(id=self._seq, text=text, created=now, reason=reason,
                       deadline=now + countdown if review == "auto" else None)
+        prev_changed = False
+        prev = next((c for c in reversed(self.items) if c.status != "discarded"), None)
+        if prev is not None and auto_break:
+            mark = sentence_break(prev.text, prev.reason, now - prev.created, text)
+            if mark is not None:
+                chunk.newline = True
+                if mark and prev.text[-1] not in _PUNCT_END:
+                    prev.text += mark
+                    prev_changed = prev.status == "sent"
+                    if prev_changed:
+                        self._write()
         self.items.append(chunk)
         self._trim()
-        return chunk
+        return chunk, prev_changed
 
     def find(self, chunk_id: int) -> Chunk | None:
         return next((c for c in self.items if c.id == chunk_id), None)
@@ -71,6 +130,16 @@ class LiveSession:
         if chunk.status != "sent":
             chunk.status, chunk.sent_at = "sent", time.time()
         self._write()
+        return True
+
+    def toggle_break(self, chunk_id: int, on: bool | None = None) -> bool:
+        """조작자 줄바꿈: 이 조각 뒤에서 줄을 바꾼다. 이미 나간 조각이면 자막 화면에 바로 반영된다."""
+        chunk = self.find(chunk_id)
+        if chunk is None or chunk.status == "discarded":
+            return False
+        chunk.break_after = (not chunk.break_after) if on is None else on
+        if chunk.status == "sent":
+            self._write()
         return True
 
     def discard(self, chunk_id: int) -> bool:
@@ -138,7 +207,7 @@ class LiveSession:
 
     def display_view(self, limit: int = 40) -> list[dict]:
         sent = [c for c in self.items if c.status == "sent"]
-        return [{"id": c.id, "text": c.text} for c in sent[-limit:]]
+        return [{"id": c.id, "text": c.text, "newline": c.newline, "break_after": c.break_after} for c in sent[-limit:]]
 
     # ───────── 기록 ─────────
 
@@ -153,7 +222,15 @@ class LiveSession:
         sent = [c for c in self.items if c.status == "sent"]
         path = self.transcript_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        lines = [f"[{datetime.fromtimestamp(c.sent_at or c.created):%H:%M:%S}] {c.text}" for c in sent]
+        # 자막 화면과 같은 줄 단위로 쓴다. 줄 첫 조각의 시각을 붙인다.
+        lines: list[str] = []
+        prev = None
+        for c in sent:
+            if not lines or c.newline or (prev and (prev.break_after or prev.text[-1:] in _PUNCT_END)):
+                lines.append(f"[{datetime.fromtimestamp(c.sent_at or c.created):%H:%M:%S}] {c.text}")
+            else:
+                lines[-1] += " " + c.text
+            prev = c
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _trim(self) -> None:

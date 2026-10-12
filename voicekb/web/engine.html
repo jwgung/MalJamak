@@ -288,7 +288,8 @@ function pendingWords(L, upto) {
   return parts.filter(Boolean);
 }
 
-function emitLive(L, upto) {
+// reason: 조각이 잘린 이유. 서버가 문장 경계를 판단할 때 쓴다 (final > pause > boundary > max).
+function emitLive(L, upto, reason = "max") {
   if (upto <= L.emitted) return;
   const parts = pendingWords(L, upto);
   L.emitted = upto;
@@ -296,7 +297,7 @@ function emitLive(L, upto) {
   L.emittedChars += parts.join("").length;
   if (!parts.length) return;
   L.lastEmit = performance.now();
-  send({ type: "draft", text: parts.join(" ") });
+  send({ type: "draft", text: parts.join(" "), reason });
 }
 
 function sendLivePreview(L) {
@@ -337,10 +338,10 @@ function evaluateLive(L) {
   if (pending > 0) {
     const sinceEmit = now - L.lastEmit;
     const cut = lastBoundary(L, stable);
-    if (L.finalCount === L.words.length && stable === L.words.length) emitLive(L, stable);  // 1. 문장 확정
-    else if (now - L.lastChange >= L.pauseMs) emitLive(L, L.words.length);  // 2. 말이 멈춤: 바뀌는 게 없으니 전부
-    else if (cut > 0 && sinceEmit >= MIN_GAP_MS) emitLive(L, cut);  // 3. 의미 단위가 끝나는 어미
-    else if (sinceEmit >= L.maxMs && stable > L.emitted) emitLive(L, cut > 0 ? cut : stable);  // 4. 너무 오래 쌓임
+    if (L.finalCount === L.words.length && stable === L.words.length) emitLive(L, stable, "final");  // 1. 문장 확정
+    else if (now - L.lastChange >= L.pauseMs) emitLive(L, L.words.length, "pause");  // 2. 말이 멈춤: 바뀌는 게 없으니 전부
+    else if (cut > 0 && sinceEmit >= MIN_GAP_MS) emitLive(L, cut, "boundary");  // 3. 의미 단위가 끝나는 어미
+    else if (sinceEmit >= L.maxMs && stable > L.emitted) emitLive(L, cut > 0 ? cut : stable, "max");  // 4. 너무 오래 쌓임
   }
   sendLivePreview(L);
 }
@@ -381,11 +382,11 @@ async function startLive(msg) {
   r.onresult = (e) => { restarter.ok(); onLiveResult(L, e); };
   r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("live", e.error); };
   // 세션이 끊기면(침묵·네트워크 오류) 아직 확정 안 된 말까지 조각으로 넘겨 유실을 막는다.
-  r.onend = () => { emitLive(L, L.words.length); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
+  r.onend = () => { emitLive(L, L.words.length, "pause"); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
   L.timer = setInterval(() => evaluateLive(L), 200);
   if (testAudio) testAudio.onended = () => {
     if (live !== L) return;
-    emitLive(L, L.words.length);
+    emitLive(L, L.words.length, "pause");
     stopLive();
     send({ type: "live_stopped", reason: "테스트 소리가 끝났습니다." });
   };

@@ -23,14 +23,30 @@ const text = document.getElementById("text");
 const box = document.getElementById("box");
 let style = { font_size: 56, lines: 3 };
 
+// 줄바꿈: 조작자가 Shift+Enter 로 표시한 조각 뒤, 조작자가 찍은 문장부호 뒤, (켜져 있으면) 자동 줄바꿈 지점.
+// 한 문장이 길면 그 안에서만 화면 폭에 맞춰 넘어간다.
+const SENTENCE_END = /[.?!。？！…]$/;
+
 function render(items) {
   text.style.fontSize = `${style.font_size}px`;
   text.style.lineHeight = "1.45";
   box.style.maxHeight = `${style.font_size * 1.45 * style.lines}px`;
-  text.replaceChildren(...items.flatMap((item, i) => {
-    const span = document.createElement("span");
-    span.textContent = item.text;
-    return i ? [document.createTextNode(" "), span] : [span];
+  const lines = [];
+  let prev = null;
+  for (const item of items) {
+    if (!lines.length || item.newline || (prev && (prev.break_after || SENTENCE_END.test(prev.text)))) lines.push([]);
+    lines[lines.length - 1].push(item);
+    prev = item;
+  }
+  text.replaceChildren(...lines.map((line) => {
+    const div = document.createElement("div");
+    line.forEach((item, i) => {
+      if (i) div.append(" ");
+      const span = document.createElement("span");
+      span.textContent = item.text;
+      div.append(span);
+    });
+    return div;
   }));
   // 최신 줄이 보이도록 아래로 붙인다.
   box.scrollTop = box.scrollHeight;

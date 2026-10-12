@@ -40,6 +40,9 @@
   .item.focused { outline: 2px solid var(--accent); background: var(--focus); }
   .item.sent .text { color: var(--muted); }
   .item.discarded { display: none; }
+  /* 조작자 줄바꿈(Shift+Enter): 이 조각 뒤에서 자막 화면 줄이 바뀐다 */
+  .item.brk { border-bottom: 2px solid var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 10px; }
+  .item .brkmark { color: var(--accent); font-weight: 700; width: 16px; flex-shrink: 0; }
   .item .text { flex: 1; font-size: 17px; border: none; background: transparent; color: inherit; font: inherit;
                 font-size: 17px; padding: 4px 6px; border-radius: 6px; min-width: 0; }
   .item .text:focus { outline: none; background: var(--card); }
@@ -100,6 +103,7 @@
     <label>안정 판정 (초)<input id="stable" type="number" min="0.3" max="3" step="0.1"></label>
     <label>자막 글자 크기 (px)<input id="font" type="number" min="20" max="160" step="2"></label>
     <label>자막 줄 수<input id="lines" type="number" min="1" max="8"></label>
+    <label>자동 줄바꿈 (실험)<select id="autobreak"><option value="false">끄기 — Shift+Enter 로 직접</option><option value="true">켜기 — 앞뒤 문맥으로 추측</option></select></label>
   </div>
   <p class="pill">조각은 문장 끝 → 말 멈춤 → "~다, ~요, ~고, ~는데" 같은 어미 순으로 자연스러운 곳에서 자릅니다.
     소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</p>
@@ -107,7 +111,7 @@
 <main id="list"></main>
 <div id="preview"></div>
 <footer>
-  <kbd>Enter</kbd> 내보내기(고친 내용 포함) · <kbd>Esc</kbd> 버리기 · <kbd>↑</kbd><kbd>↓</kbd> 이동 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 대기 중 모두 내보내기
+  <kbd>Enter</kbd> 내보내기(고친 내용 포함) · <kbd>Shift</kbd>+<kbd>Enter</kbd> 내보내고 줄바꿈(나간 조각은 줄바꿈 켜기/끄기) · <kbd>Esc</kbd> 버리기 · <kbd>↑</kbd><kbd>↓</kbd> 이동 · <kbd>Ctrl</kbd>+<kbd>Enter</kbd> 대기 중 모두 내보내기
   · 고치기 시작하면 카운트다운이 멈춥니다 · <span id="file"></span>
 </footer>
 
@@ -193,11 +197,14 @@ function makeRow(item) {
   bar.className = "bar"; bar.innerHTML = "<i></i>";
   const meta = document.createElement("span");
   meta.className = "meta";
+  const brkmark = document.createElement("span");
+  brkmark.className = "brkmark";
+  brkmark.title = "이 조각 뒤에서 자막 줄이 바뀝니다";
   const sendBtn = document.createElement("button");
   sendBtn.textContent = "내보내기";
   const dropBtn = document.createElement("button");
   dropBtn.textContent = "버리기";
-  el.append(input, bar, meta, sendBtn, dropBtn);
+  el.append(input, brkmark, bar, meta, sendBtn, dropBtn);
 
   let editing = false;
   input.addEventListener("focus", () => setFocus(item.id, false));
@@ -209,6 +216,20 @@ function makeRow(item) {
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendAll(); return; }
+    if (e.key === "Enter" && e.shiftKey) {
+      e.preventDefault();
+      const cur = rows.get(item.id).item;
+      if (cur.status === "sent") {
+        // 이미 나간 조각: 고친 내용이 있으면 반영하고 줄바꿈을 켜고 끈다.
+        if (editing || input.value !== cur.text) send({ cmd: "send", id: item.id, text: input.value });
+        send({ cmd: "toggle_break", id: item.id });
+      } else {
+        send({ cmd: "send", id: item.id, text: input.value, break_after: true });
+        moveFocus(1, true);
+      }
+      editing = false;
+      return;
+    }
     if (e.key === "Enter") { e.preventDefault(); editing = false; send({ cmd: "send", id: item.id, text: input.value }); moveFocus(1, true); }
     else if (e.key === "Escape") { e.preventDefault(); editing = false; send({ cmd: "discard", id: item.id }); moveFocus(1, true); }
     else if (e.key === "ArrowDown") { e.preventDefault(); moveFocus(1); }
@@ -216,7 +237,7 @@ function makeRow(item) {
   });
   sendBtn.onclick = () => { editing = false; send({ cmd: "send", id: item.id, text: input.value }); };
   dropBtn.onclick = () => { editing = false; send({ cmd: "discard", id: item.id }); };
-  const row = { el, input, bar: bar.firstChild, meta, isEditing: () => editing };
+  const row = { el, input, bar: bar.firstChild, meta, brkmark, isEditing: () => editing };
   rows.set(item.id, row);
   return row;
 }
@@ -233,6 +254,8 @@ function render() {
     row.el.classList.toggle("pending", item.status === "pending");
     row.el.classList.toggle("sent", item.status === "sent");
     row.el.classList.toggle("discarded", item.status === "discarded");
+    row.el.classList.toggle("brk", !!item.break_after);
+    row.brkmark.textContent = item.break_after ? "↵" : "";
     // 조작자가 고치고 있는 칸은 덮어쓰지 않는다.
     if (!row.isEditing() && document.activeElement !== row.input) row.input.value = item.text;
     row.item = item;
@@ -296,7 +319,7 @@ async function loadSettings() {
   const { settings } = await (await fetch("/api/settings")).json();
   const l = settings.live;
   $("lang").value = l.lang; $("engine").value = l.engine; $("processing").value = String(l.voice_processing);
-  $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines;
+  $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines; $("autobreak").value = String(l.auto_break);
   try {
     const { mics } = await (await fetch("/api/sources")).json();
     mics.filter((m) => m.id !== "default" && m.id !== "communications")
@@ -321,6 +344,7 @@ $("maxwait").onchange = () => save({ max_wait_seconds: Number($("maxwait").value
 $("stable").onchange = () => save({ stable_seconds: Number($("stable").value) });
 $("font").onchange = () => save({ font_size: Number($("font").value) });
 $("lines").onchange = () => save({ lines: Number($("lines").value) });
+$("autobreak").onchange = () => save({ auto_break: $("autobreak").value === "true" });
 
 $("btnLive").onclick = () => {
   const player = $("testPlayer");

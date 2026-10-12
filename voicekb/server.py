@@ -272,12 +272,14 @@ class Hub:
             for ws in list(self.displays):
                 await self._send(ws, payload)
 
-    async def on_draft(self, text: str) -> None:
+    async def on_draft(self, text: str, reason: str = "") -> None:
         if not self.live_on:
             return
         cfg = self.config.get()["live"]
-        if self.live.add_draft(text, cfg["review"], cfg["countdown"]):
-            await self.broadcast_live(display=False)
+        chunk, prev_changed = self.live.add_draft(text, cfg["review"], cfg["countdown"], reason, cfg["auto_break"])
+        if chunk:
+            # 앞 조각에 문장부호가 붙었고 이미 나간 조각이면 자막 화면도 갱신한다.
+            await self.broadcast_live(display=prev_changed)
 
     async def on_operator(self, data: dict) -> None:
         cmd = data.get("cmd")
@@ -286,6 +288,11 @@ class Hub:
         changed_display = False
         if cmd == "send":
             changed_display = self.live.send(chunk_id, data.get("text"))
+            if data.get("break_after"):
+                self.live.toggle_break(chunk_id, True)
+        elif cmd == "toggle_break":
+            chunk = self.live.find(chunk_id)
+            changed_display = self.live.toggle_break(chunk_id) and chunk.status == "sent"
         elif cmd == "discard":
             changed_display = self.live.discard(chunk_id)
         elif cmd == "update":
@@ -447,7 +454,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 hub.last_error = data.get("reason", "")
                 await hub._changed()
             elif kind == "draft":
-                await hub.on_draft(data.get("text", ""))
+                await hub.on_draft(data.get("text", ""), data.get("reason", ""))
             elif kind == "live_preview":
                 hub.live_preview = data.get("text", "")
                 await hub.broadcast_live(display=False)

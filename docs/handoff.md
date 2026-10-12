@@ -20,6 +20,7 @@
 | v0.2.1 | 2초 고정 간격 대신 자연스러운 지점에서 자르기 |
 | v0.2.2 | 유튜브 링크를 테스트 소리로, 단어 합쳐짐 중복 버그 수정, 단위 테스트 |
 | v0.2.3 | 번역 모델 받기 창, 테스트 소리 칸 정리 |
+| v0.2.4 | 조작자 줄바꿈(Shift+Enter), 자동 줄바꿈(실험, 기본 끔), Python 단위 테스트 |
 
 ## 핵심 설계 결정과 근거
 
@@ -53,7 +54,7 @@
    - 밀린 정도 표시(대기 n개 · 약 n초 지연)
    - 조각 크기 선택(짧게 / 문장 단위)
    - 추천 기본값: 자동, 카운트다운 2초, 최대 대기 3초, 쉼 0.6초 → 약 4초
-2. **자막 화면 줄바꿈: 사용자가 "문장마다 새 줄" 선택** — 아직 구현 안 함. 화면은 최대 2줄 권장.
+2. ~~자막 화면 줄바꿈~~ → v0.2.4: 기계적 판단은 오류가 많다는 사용자 판단에 따라 **조작자가 `Shift+Enter`로 줄바꿈**(관례상 가장 익숙한 키). 조작자가 찍은 문장부호 뒤에서도 바뀜. 앞뒤 문맥 추측(`sentence_break`)은 "자동 줄바꿈(실험)" 설정으로만 남김(기본 끔). 자막 줄 수 기본 2.
 3. 단축키를 키 눌러서 지정하는 방식(지금은 `<ctrl>+<alt>+<space>` 형식 직접 입력)
 4. Chrome 이 이미 내보낸 단어를 나중에 고치면 반영 안 됨 → 조작자가 고쳐야 함
 5. 프로젝터 모니터 자동 배치(지금은 창을 옮겨 더블클릭)
@@ -69,6 +70,6 @@
 - **시스템 소리**: `pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=vk-test-sink media.class=Audio/Sink object.linger=true audio.position=[FL FR] }'` 로 가상 스피커를 만들고 `pw-play --target vk-test-sink` 로 재생. 끝나면 `pw-cli destroy <id>` 로 지운다.
 - **페이지 조작**: Chrome `--remote-debugging-port` + CDP `Runtime.evaluate`(userGesture). **127.0.0.1:9333 은 adb 가 쓰고 있어** Chrome 은 `::1` 에만 열린다 → `localhost`/`[::1]` 로 접속.
 - **함정**: `pkill -f <패턴>` 은 그 패턴이 들어 있는 셸 명령 자신도 죽인다. PID 를 기록해 `kill` 할 것. 헤드리스 첫 페이지가 about:blank 로 남는 경우가 있어 `location.href` 로 다시 연다.
-- **단위 테스트**: `node tests/chunker.test.mjs` (CI 에서도 실행).
+- **단위 테스트**: `node tests/chunker.test.mjs`, `python -m unittest discover tests` (CI 에서도 실행).
 - **릴리스**: `main` 푸시 → Windows 빌드·설치 스모크 테스트, `v*` 태그 → 설치 파일 릴리스.
 - 실험 브랜치 `exp/on-device-speech`: 오프라인 인식·Groq 교정 비교용 테스트 페이지(`experiments/ondevice/test.html`).
