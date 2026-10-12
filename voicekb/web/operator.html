@@ -51,7 +51,9 @@
   .item.brk { border-bottom: 2px solid var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 8px; }
 
   /* 나간 조각: 작고 흐린 자막 기록 */
+  /* 나간 조각과 안 나간 조각의 구분: 나간 것은 ✓ 와 함께 작고 흐리게, 안 나간 것은 주황 띠를 두른 카드 */
   .item.sent { padding: 2px 8px; font-size: 14px; color: var(--text-3); }
+  .item.sent::before { content: "✓"; order: -3; flex-shrink: 0; width: 14px; color: var(--ok); font-size: 12px; font-weight: 700; }
   .item.sent .text { color: var(--text-3); padding: 2px 6px; }
   .item.sent.focused { background: var(--surface-2); border-color: var(--line); }
   .item.sent.focused .text { color: var(--text); }
@@ -61,6 +63,7 @@
                   border-color: var(--line); box-shadow: var(--shadow); }
   .item.pending .meta { font-size: 12px; }
   .item.pending .bar { display: block; }
+  .item.pending:not(.suggest) { border-left: 4px solid var(--warn); }
   .item.pending.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
   .item.pending .brkmark { font-size: 16px; }
 
@@ -72,8 +75,9 @@
   .item.suggest .srcline { order: -1; }
   .item.manual .meta { color: var(--ok); }
 
-  .divider { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; font-size: 12px; font-weight: 700; color: var(--text-3); }
-  .divider::before, .divider::after { content: ""; height: 1px; background: var(--line); }
+  .divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; font-size: 12px; font-weight: 700; color: var(--warn); }
+  .divider::before, .divider::after { content: ""; height: 2px; background: var(--warn-soft); }
+  .divider #pendingCount { padding: 3px 10px; border-radius: 999px; background: var(--warn-soft); }
   .divider::before { flex: 0 0 12px; }
   .divider::after { flex: 1; order: 1; }
   .divider .btn { order: 2; }
@@ -478,8 +482,8 @@ function render() {
     if (!row.isEditing() && document.activeElement !== row.input) row.input.value = item.text;
     row.item = item;
     row.meta.textContent = item.kind === "suggest" && item.status === "pending" ? "⚠ 번역 제안 · 확인 필요"
-                         : item.kind === "manual" ? (item.status === "sent" ? "직접 입력·나감" : "직접 입력")
-                         : item.status === "sent" ? (item.edited ? "고침·나감" : "나감")
+                         : item.kind === "manual" ? "직접 입력"
+                         : item.status === "sent" ? (item.edited ? "고침" : "")  // 나간 것은 ✓ 로 보인다
                          : item.status === "pending" ? (item.editing ? "고치는 중" : item.remaining == null ? "대기" : "") : "";
     row.bar.parentElement.style.visibility = item.status === "pending" && item.remaining != null && !item.editing ? "visible" : "hidden";
   });
