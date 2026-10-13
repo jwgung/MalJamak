@@ -1,69 +1,53 @@
 /* Voice Keyboard 공통 디자인: 설정 화면·교정 화면이 함께 쓴다.
-   색은 토큰으로만 쓰고, 밝은/어두운 테마를 모두 지원한다(시스템 설정을 따른다). */
+   색은 토큰으로만 쓴다. 기본은 어두운 테마이고, <html data-theme="light"> 이면 밝은 테마. */
 
 :root {
   --font: "Pretendard", "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
   --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color-scheme: dark;  /* 스크롤바·드롭다운 목록 같은 브라우저 기본 부품도 어둡게 */
 
-  --bg: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #f8f9fb;
-  --line: #e4e7ec;
-  --line-strong: #cfd4dc;
-  --text: #15181e;
-  --text-2: #4a5161;
-  --text-3: #8a91a0;
+  /* 무채색(zinc)만 쓴다. 색은 빨강 하나 — 듣는 중·정지·오류처럼 꼭 눈에 띄어야 할 때만.
+     ok·warn·suggest 는 이름만 남기고 회색 단계로 둔다(구분은 굵기·테두리 모양으로). */
+  --bg: #09090b;
+  --surface: #09090b;
+  --surface-2: #18181b;
+  --line: #27272a;
+  --line-strong: #3f3f46;
+  --text: #fafafa;
+  --text-2: #d4d4d8;
+  --text-3: #a1a1aa;
 
-  --accent: #3b5bdb;
-  --accent-soft: #e8edff;
-  --accent-text: #ffffff;
-  --live: #e03131;
-  --live-soft: #ffe9e9;
-  --ok: #2b8a3e;
-  --ok-soft: #e6f6ea;
-  --warn: #c77700;
-  --warn-soft: #fff4e0;
-  --suggest: #7048e8;
-  --suggest-soft: #f1ecff;
+  --accent: #fafafa;
+  --accent-soft: #27272a;
+  --accent-text: #18181b;
+  --ring: #71717a;
+  --ring-soft: rgba(113, 113, 122, 0.35);
+  --live: #ef4444;
+  --live-soft: #2a1215;
+  --ok: #a1a1aa;
+  --ok-soft: #27272a;
+  --warn: #fafafa;
+  --warn-soft: #27272a;
+  --suggest: #a1a1aa;
+  --suggest-soft: #111113;
 
   /* 버튼·입력칸·선택 상자는 모두 같은 높이 (한 줄에 나란히 놓여도 어긋나지 않게) */
   --control-h: 36px;
-  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%238a91a0' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  --radius: 10px;
-  --radius-sm: 7px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
-  --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.16);
+  --chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%2371717a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow: none;
+  --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.6);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0f1115;
-    --surface: #171a20;
-    --surface-2: #1d2128;
-    --line: #2a2f38;
-    --line-strong: #3a404b;
-    --text: #e8eaee;
-    --text-2: #b4bac5;
-    --text-3: #7d8494;
-    --accent: #6b8cff;
-    --accent-soft: #1f2a4d;
-    --live: #ff6b6b;
-    --live-soft: #3a1d20;
-    --ok: #51cf66;
-    --ok-soft: #17301d;
-    --warn: #fcc419;
-    --warn-soft: #34290f;
-    --suggest: #b197fc;
-    --suggest-soft: #2a2245;
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0f1115; --surface: #171a20; --surface-2: #1d2128; --line: #2a2f38; --line-strong: #3a404b;
-  --text: #e8eaee; --text-2: #b4bac5; --text-3: #7d8494; --accent: #6b8cff; --accent-soft: #1f2a4d;
-  --live: #ff6b6b; --live-soft: #3a1d20; --ok: #51cf66; --ok-soft: #17301d; --warn: #fcc419; --warn-soft: #34290f;
-  --suggest: #b197fc; --suggest-soft: #2a2245;
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --surface-2: #f4f4f5; --line: #e4e4e7; --line-strong: #d4d4d8;
+  --text: #09090b; --text-2: #3f3f46; --text-3: #71717a; --accent: #18181b; --accent-soft: #f4f4f5; --accent-text: #fafafa;
+  --ring: #a1a1aa; --ring-soft: rgba(161, 161, 170, 0.28);
+  --live: #dc2626; --live-soft: #fef2f2; --ok: #52525b; --ok-soft: #f4f4f5; --warn: #18181b; --warn-soft: #f4f4f5;
+  --suggest: #71717a; --suggest-soft: #fafafa;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.05); --shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
 * { box-sizing: border-box; }
@@ -80,7 +64,7 @@ code { font: 12px var(--mono); padding: 1px 5px; border-radius: 5px; background:
 .btn:hover { background: var(--surface-2); }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.btn.primary:hover { filter: brightness(1.06); }
+.btn.primary:hover { opacity: .9; }
 .btn.danger { background: var(--live); border-color: var(--live); color: #fff; }
 .btn.ghost { border-color: transparent; background: transparent; color: var(--text-2); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
@@ -96,7 +80,7 @@ input[type=text], input[type=password], input[type=number], select, textarea {
   width: 100%; height: var(--control-h); padding: 0 10px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong);
   background: var(--surface); color: var(--text); font: 14px var(--font); outline: none; transition: border-color .12s, box-shadow .12s; }
 textarea { height: auto; padding: 8px 10px; resize: vertical; line-height: 1.5; }
-input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+input:focus, select:focus, textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 3px var(--ring-soft); }
 select option { background: var(--surface); color: var(--text); }
 /* 드롭다운: 브라우저 기본 화살표 대신 다른 입력칸과 같은 모양 + 얇은 화살표 */
 select { appearance: none; -webkit-appearance: none; padding-right: 32px; cursor: pointer;
@@ -129,4 +113,4 @@ input::placeholder, textarea::placeholder { color: var(--text-3); }
 .section-title { font-size: 12px; font-weight: 700; color: var(--text-3); text-transform: none; letter-spacing: .02em; }
 
 /* 접근성: 키보드 포커스는 늘 보이게 */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }

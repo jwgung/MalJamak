@@ -37,38 +37,41 @@
   .item.discarded { display: none; }
   .item .text { flex: 1; min-width: 0; border: none; background: transparent; color: inherit; font: inherit;
                 padding: 4px 6px; border-radius: 6px; outline: none; }
-  .item .text:focus { background: transparent; }
+  .item .text:focus { background: transparent; box-shadow: none; }  /* 카드 테두리가 이미 포커스를 보여 준다 */
   .item .brkmark { color: var(--accent); font-weight: 700; flex-shrink: 0; }
   .item .meta { font-size: 12px; color: var(--text-3); flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
   .item .acts { display: flex; gap: 4px; flex-shrink: 0; opacity: 0; pointer-events: none; transition: opacity .12s; }
   .item:hover .acts, .item.focused .acts { opacity: 1; pointer-events: auto; }
   .item .srcline { flex-basis: 100%; font-size: 12px; color: var(--text-3); padding: 0 6px; }
-  .item .kbdhint { display: none; flex-basis: 100%; font-size: 12px; color: var(--text-3); padding: 2px 6px 0; }
-  .item.pending.focused .kbdhint { display: block; }
   .item .bar { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; }
   .item .bar i { display: block; height: 100%; background: var(--warn); }
   /* 조작자 줄바꿈(Shift+Enter): 이 조각 뒤에서 자막 화면 줄이 바뀐다 */
-  .item.brk { border-bottom: 2px solid var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 8px; }
+  .item.brk { border-bottom: 2px solid var(--ring); border-bottom-left-radius: 0; border-bottom-right-radius: 0; margin-bottom: 8px; }
 
   /* 나간 조각: 작고 흐린 자막 기록 */
-  /* 나간 조각과 안 나간 조각의 구분: 나간 것은 ✓ 와 함께 작고 흐리게, 안 나간 것은 주황 띠를 두른 카드 */
+  /* 나간 조각과 안 나간 조각의 구분: 나간 것은 ✓ 와 함께 작고 흐리게, 안 나간 것은 테두리 카드에 큰 글씨 */
   .item.sent { padding: 2px 8px; font-size: 14px; color: var(--text-3); }
   .item.sent::before { content: "✓"; order: -3; flex-shrink: 0; width: 14px; color: var(--ok); font-size: 12px; font-weight: 700; }
   .item.sent .text { color: var(--text-3); padding: 2px 6px; }
   .item.sent.focused { background: var(--surface-2); border-color: var(--line); }
   .item.sent.focused .text { color: var(--text); }
 
-  /* 대기 조각: 강조 카드 */
-  .item.pending { padding: 12px 14px 14px; margin: 8px 0; font-size: 19px; line-height: 1.5; background: var(--surface);
-                  border-color: var(--line); box-shadow: var(--shadow); }
+  /* 대기 조각: 지금 다룰 조각(포커스) 하나만 크게·밝게, 나머지 대기 조각은 한 단계 낮춰 시선이 흩어지지 않게 */
+  .item.pending { padding: 10px 14px 12px; margin: 6px 0; font-size: 18px; line-height: 1.5; background: var(--surface);
+                  border-color: var(--line); box-shadow: var(--shadow); color: var(--text-2); }
   .item.pending .meta { font-size: 12px; }
   .item.pending .bar { display: block; }
-  .item.pending:not(.suggest) { border-left: 4px solid var(--warn); }
-  .item.pending.focused { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow); }
+  .item.pending.focused { padding: 16px 18px 18px; margin: 10px 0; font-size: 26px; font-weight: 600; color: var(--text);
+                          border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring-soft), var(--shadow); }
+  .item.pending.focused .meta { font-size: 16px; font-weight: 600; color: var(--text); }
+  .item.pending.focused .bar { height: 5px; }
+  /* 나간 조각의 꼬리표(고침·직접 입력)는 그 줄을 볼 때만 */
+  .item.sent .meta { display: none; }
+  .item.sent:hover .meta, .item.sent.focused .meta { display: inline; }
   .item.pending .brkmark { font-size: 16px; }
 
   /* 누락 의심 자리의 기계 번역 제안: 조작자가 확인해야 나간다 */
-  .item.suggest { border-left: 4px solid var(--suggest); }
+  .item.suggest { border: 1px dashed var(--text-3); }
   .item.suggest.pending { background: var(--suggest-soft); }
   .item.suggest .meta { color: var(--suggest); font-weight: 600; }
   .item.suggest.pending .meta { order: -2; flex-basis: 100%; text-align: left; padding: 0 6px; }
@@ -76,25 +79,38 @@
   .item.manual .meta { color: var(--ok); }
 
   .divider { display: flex; align-items: center; gap: 10px; margin: 16px 0 6px; font-size: 12px; font-weight: 700; color: var(--warn); }
-  .divider::before, .divider::after { content: ""; height: 2px; background: var(--warn-soft); }
+  .divider::before, .divider::after { content: ""; height: 1px; background: var(--line-strong); }
   .divider #pendingCount { padding: 3px 10px; border-radius: 999px; background: var(--warn-soft); }
   .divider::before { flex: 0 0 12px; }
   .divider::after { flex: 1; order: 1; }
   .divider .btn { order: 2; }
 
+  /* 전체 멈춤 중: 목록 위에 뒤집힌 색 띠 — 지금 아무것도 자동으로 나가지 않는다는 걸 놓치지 않게 */
+  #pausedBar { flex-shrink: 0; padding: 8px 20px; text-align: center; font-weight: 700; font-size: 15px;
+               background: var(--text); color: var(--bg); }
+  #pausedBar kbd { background: transparent; color: inherit; border-color: currentColor; }
+  #pausedBar:not([hidden]) ~ #list .item .bar { display: none; }  /* 멈춘 동안은 카운트다운 막대를 숨긴다 */
+
   /* ── 하단 독 ── */
-  .dock { flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--line);
-          padding: 8px max(20px, calc((100% - 920px) / 2)) 14px; display: flex; flex-direction: column; gap: 6px; }
-  #other { font-size: 13px; color: var(--text-3); padding: 4px 0 6px; border-bottom: 1px dashed var(--line); }
-  #other .ohead { display: flex; gap: 10px; align-items: baseline; margin-bottom: 2px; }
+  .dock { position: relative; flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--line);
+          padding: 6px max(20px, calc((100% - 920px) / 2)) 10px; display: flex; flex-direction: column; gap: 4px; }
+  /* 위쪽 손잡이를 끌어 강사 원어 칸 높이를 바꾼다 (기본은 두 줄, 지난 줄은 스크롤) */
+  #dockGrip { position: absolute; left: 0; right: 0; top: -4px; height: 9px; cursor: ns-resize; z-index: 2; }
+  #dockGrip::after { content: ""; position: absolute; left: 50%; top: 3px; width: 36px; height: 3px; margin-left: -18px;
+                     border-radius: 2px; background: var(--line-strong); }
+  #dockGrip:hover::after, #dockGrip.dragging::after { background: var(--text-3); }
+  #other { font-size: 13px; color: var(--text-3); padding: 0 0 4px; border-bottom: 1px dashed var(--line);
+           height: 58px; overflow-y: auto; scrollbar-width: thin; }
+  #other .ohead { position: sticky; top: 0; display: flex; gap: 10px; align-items: baseline; background: var(--surface); }
   #other .ohead b { color: var(--text-2); font-weight: 700; font-size: 12px; }
   #other .ohead .hint { font-size: 12px; }
   #other .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #other .src { cursor: pointer; border-radius: 6px; padding: 1px 4px; }
   #other .src:hover { background: var(--accent-soft); color: var(--text); }
-  #preview { min-height: 22px; font-size: 13px; font-style: italic; color: var(--text-3); white-space: nowrap;
+  #preview { min-height: 20px; font-size: 13px; font-style: italic; color: var(--text-3); white-space: nowrap;
              overflow: hidden; text-overflow: ellipsis; }
   .manualrow { display: flex; align-items: center; gap: 10px; }
+  #keys { font-size: 12px; color: var(--text-3); }
   #manual { flex: 1; font-size: 15px; }
   #manualAt { font-size: 12px; color: var(--accent); white-space: nowrap; }
 
@@ -125,7 +141,7 @@
   #help dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; align-items: baseline; }
   #help dt { white-space: nowrap; } #help dd { margin: 0; color: var(--text-2); font-size: 13px; }
   #help .note { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
-  #help .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--suggest); margin-right: 6px; }
+  #help .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; border: 1px dashed var(--text-3); margin-right: 6px; }
 </style>
 </head>
 <body>
@@ -143,14 +159,17 @@
 <div id="error" title="눌러서 닫기"></div>
 <div class="shell">
   <div class="stage">
+    <div id="pausedBar" hidden>⏸ 멈춤 — 자동으로 나가지 않습니다 · <kbd>Ctrl</kbd>+<kbd>Space</kbd> 다시 흐르기</div>
     <main id="list"></main>
     <div class="dock">
+      <div id="dockGrip" title="끌어서 강사 원어 칸 크기 조정" hidden></div>
       <div id="other" hidden></div>
       <div id="preview"></div>
       <div class="manualrow">
         <input id="manual" type="text" placeholder="직접 입력 — 빠진 말을 쓰고 Enter 로 바로 내보내기">
         <span id="manualAt"></span>
       </div>
+      <div id="keys"><kbd>Enter</kbd> 내보내기 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기 · <kbd>Ctrl+Space</kbd> 멈춤</div>
     </div>
   </div>
   <aside class="panel" id="panel">
@@ -233,7 +252,7 @@
       <dt><kbd>Ctrl</kbd>+<kbd>Space</kbd></dt><dd>자동 내보내기 전체 멈춤 / 다시 흐르기 — 틀린 것을 고치는 동안</dd>
       <dt><kbd>Insert</kbd></dt><dd>이 조각 뒤에 직접 입력</dd>
     </dl>
-    <p class="hint note"><span class="sw"></span>보라색 조각은 강사 원어의 기계 번역 제안입니다. 확인해야 나갑니다.</p>
+    <p class="hint note"><span class="sw"></span>점선 테두리 조각은 강사 원어의 기계 번역 제안입니다. 확인해야 나갑니다.</p>
   </div>
 </div>
 
@@ -285,8 +304,7 @@ function connect() {
     const msg = JSON.parse(e.data);
     if (msg.type !== "queue") return;
     items = msg.items; status = msg.status; receivedAt = performance.now();
-    $("preview").textContent = msg.preview ? `말하는 중: ${msg.preview}`
-      : status.live && status.mode === "interpret" ? "순차통역: 강사 말은 건너뛰고 통역(한국어) 구간만 받습니다" : "";
+    $("preview").textContent = msg.preview ? `말하는 중: ${msg.preview}` : "";
     renderOther(msg.other || []);
     render();
   };
@@ -323,15 +341,16 @@ function renderTest() {
 }
 
 // 순차통역 모드: 강사 원어 인식 결과를 참고용으로 보여준다.
-// 통역이 빠졌으면 원어 문장을 누른다 → 그 번역 제안(보라색)이 지금 고른 조각 뒤에 들어간다. 확인하고 Enter 로 내보낸다.
+// 통역이 빠졌으면 원어 문장을 누른다 → 그 번역 제안(점선 테두리)이 지금 고른 조각 뒤에 들어간다. 확인하고 Enter 로 내보낸다.
 function renderOther(lines) {
   const box = $("other");
-  box.hidden = status.mode !== "interpret" || !lines.length;
+  box.hidden = $("dockGrip").hidden = status.mode !== "interpret" || !lines.length;
   if (box.hidden) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
   const head = document.createElement("div");
   head.className = "ohead";
   head.innerHTML = '<b>강사 원어</b><span class="hint">통역이 빠졌으면 문장을 누르세요 → 번역 제안</span>';
-  box.replaceChildren(head, ...lines.slice(-4).map((t, i, arr) => {
+  box.replaceChildren(head, ...lines.map((t, i, arr) => {
     const div = document.createElement("div");
     div.className = "line";
     const span = document.createElement("span");
@@ -343,6 +362,28 @@ function renderOther(lines) {
     if (i === arr.length - 1) div.style.color = "var(--text)";
     return div;
   }));
+  if (atBottom) box.scrollTop = box.scrollHeight;  // 지난 줄을 올려 보는 중이 아니면 최신 줄로
+}
+
+// 강사 원어 칸 높이: 손잡이를 위아래로 끌어 바꾸고 기억한다
+{
+  const grip = $("dockGrip"), box = $("other");
+  try { const h = Number(localStorage.getItem("vk.operator.otherHeight")); if (h) box.style.height = `${h}px`; } catch (_) {}
+  let startY = 0, startH = 0;
+  grip.addEventListener("pointerdown", (e) => {
+    startY = e.clientY; startH = box.offsetHeight;
+    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+    grip.classList.add("dragging"); e.preventDefault();
+  });
+  grip.addEventListener("pointermove", (e) => {
+    if (!grip.classList.contains("dragging")) return;
+    const h = Math.max(24, Math.min(window.innerHeight * 0.5, startH + startY - e.clientY));
+    box.style.height = `${h}px`;
+  });
+  grip.addEventListener("pointerup", () => {
+    grip.classList.remove("dragging");
+    try { localStorage.setItem("vk.operator.otherHeight", String(box.offsetHeight)); } catch (_) {}
+  });
 }
 
 function renderHeader() {
@@ -357,6 +398,7 @@ function renderHeader() {
   $("btnPause").hidden = !canPause;
   $("btnPause").textContent = status.paused ? "▶ 다시 흐르기" : "⏸ 멈춤";
   $("btnPause").className = status.paused ? "btn primary" : "btn";
+  $("pausedBar").hidden = !(status.live && status.paused);
   if (status.live && status.paused) {
     $("stateText").textContent += " · 멈춤";
     $("state").className = "chip warn";
@@ -400,10 +442,7 @@ function makeRow(item) {
   const acts = document.createElement("span");
   acts.className = "acts";
   acts.append(sendBtn, dropBtn);
-  const kbdhint = document.createElement("div");
-  kbdhint.className = "kbdhint";
-  kbdhint.innerHTML = "<kbd>Enter</kbd> 내보내기 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기";
-  el.append(input, brkmark, bar, meta, acts, kbdhint);
+  el.append(input, brkmark, bar, meta, acts);
 
   let editing = false;
   input.addEventListener("focus", () => setFocus(item.id, false));
