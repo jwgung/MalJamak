@@ -290,13 +290,18 @@ class Hub:
             for ws in list(self.displays):
                 await self._send(ws, payload)
 
-    async def on_draft(self, text: str, reason: str = "") -> None:
+    async def on_draft(self, text: str, reason: str = "", side: str = "", pair_id: int | None = None,
+                       source: str = "") -> None:
         if not self.live_on:
             return
         cfg = self.config.get()["live"]
         # 자동 줄바꿈 추측은 한국어 어미·접속어 규칙이라 자막 언어가 한국어일 때만 쓴다 (다른 언어는 Shift+Enter)
-        auto_break = cfg["auto_break"] and _base(cfg["lang"]) == "ko"
-        chunk, prev_changed = self.live.add_draft(text, cfg["review"], cfg["countdown"], reason, auto_break)
+        # dual 모드에서 영어(번역) 쪽은 한국어 어미 규칙이 맞지 않는다
+        auto_break = cfg["auto_break"] and _base(cfg["lang"]) == "ko" and side != "translate"
+        chunk, prev_changed = self.live.add_draft(text, cfg["review"], cfg["countdown"], reason, auto_break,
+                                                  side=side, pair_id=pair_id)
+        if chunk and source:
+            chunk.source = source  # dual 번역 조각: 영어 원어를 보관 (조작자 참고용)
         if chunk:
             # 앞 조각에 문장부호가 붙었고 이미 나간 조각이면 자막 화면도 갱신한다.
             await self.broadcast_live(display=prev_changed)
@@ -505,7 +510,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 hub.last_error = data.get("reason", "")
                 await hub._changed()
             elif kind == "draft":
-                await hub.on_draft(data.get("text", ""), data.get("reason", ""))
+                await hub.on_draft(data.get("text", ""), data.get("reason", ""),
+                                   side=data.get("side", ""), pair_id=data.get("pair_id"),
+                                   source=data.get("source", ""))
             elif kind == "live_other":
                 hub.live_other.append(data.get("text", ""))
                 hub.live_other = hub.live_other[-200:]

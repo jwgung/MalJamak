@@ -372,6 +372,7 @@ async function startLive(msg) {
   }
   if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); testAudio?.pause(); return; }
   if (msg.mode === "interpret") { await startInterpret(msg, stream, testAudio); return; }
+  if (msg.mode === "dual") { await startDual(msg, stream, testAudio); return; }
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
@@ -417,6 +418,7 @@ async function openTestAudio(url, offset) {
 function stopLive() {
   liveGen++;
   stopInterpret();
+  stopDual();
   const L = live;
   if (!L) return;
   live = null;
@@ -632,6 +634,148 @@ function stopInterpret() {
   I.stream.getTracks().forEach((t) => t.stop());
   I.ctx.close().catch(() => {});
   if (I.testAudio) { I.testAudio.onended = null; I.testAudio.pause(); I.testAudio.removeAttribute("src"); I.testAudio.load(); }
+}
+
+// ───────────── 이중 STT 모드 ─────────────
+// 영어 STT + Chrome 내장 번역, 한글 STT 를 병렬로 돌리고 각기 자막 조각을 만든다.
+// 조작자가 둘을 나란히 보고 고른 쪽만 자막 화면에 낸다.
+// InterpretMerger 는 쓰지 않는다 — 각 언어가 자기 속도로 조각을 만들고 서로 독립적이다.
+// Chrome 인식기는 다른 언어에 무응답이라, 강사(영어) 구간은 영어만·통역(한글) 구간은 한글만 자연스럽게 잡힌다.
+
+let dual = null;
+let dualGen = 0;
+
+async function startDual(msg, stream, testAudio) {
+  stopDual();
+  const gen = dualGen;
+  const target = msg.lang || "ko-KR";   // 통역(한국어)
+  const other = msg.other_lang || "en-US"; // 강사(영어)
+
+  // Chrome 내장 번역기 (영어 → 한국어). 없으면 원문 그대로.
+  let builtin = null;
+  try { builtin = await createBuiltinTranslator(other.split("-")[0], target.split("-")[0]); }
+  catch (err) { report("dual-translator", err.message); }
+  if (gen !== dualGen) { builtin?.destroy?.(); return; }
+
+  const mkSide = (lang, side, pairSide) => {
+    const korean = String(lang).startsWith("ko");
+    const track = stream.getAudioTracks()[0];
+    const r = newRecognition(lang);
+    if (msg.local) r.processLocally = true;
+    const L = { rec: r, stream, testAudio, korean, side, pairSide,
+                maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
+                lastEmit: performance.now(), lastChange: performance.now() };
+    resetLiveSession(L);
+    const restarter = makeRestarter(() => dual !== null && (dual.Lko === L || dual.Len === L), () => r.start(track), () => {
+      stopDual();
+      send({ type: "live_stopped", reason: msg.local ? LOCAL_GIVE_UP : "자막 인식 오류가 반복되어 멈췄습니다." });
+    });
+    r.onresult = (e) => { restarter.ok(); onDualResult(L, e); };
+    r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("dual", e.error); };
+    r.onend = () => { emitDual(L, L.words.length, "pause"); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
+    L.timer = setInterval(() => evaluateDual(L), 200);
+    restarter.begin();
+    return L;
+  };
+
+  const Lko = mkSide(target, "interpret", "interpret");
+  const Len = mkSide(other, "translate", "translate");
+
+  dual = { Lko, Len, stream, testAudio, builtin, stopped: false, pairSeq: 0, lastEnPair: 0, lastEnAt: 0, lastKoPair: 0 };
+
+  if (testAudio) testAudio.onended = () => {
+    if (dual && dual.stopped) return;
+    stopDual();
+    send({ type: "live_stopped", reason: "테스트 소리가 끝났습니다." });
+  };
+}
+
+function onDualResult(L, e) {
+  const finals = [], interims = [];
+  for (let i = 0; i < e.results.length; i++) {
+    const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
+    (e.results[i].isFinal ? finals : interims).push(...words);
+  }
+  const words = finals.concat(interims);
+  const now = performance.now();
+  let d = 0;
+  while (d < words.length && d < L.words.length && words[d] === L.words[d]) d++;
+  const changed = d < words.length || words.length !== L.words.length;
+  L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
+  L.words = words;
+  L.finalCount = finals.length;
+  realignLive(L);
+  if (changed) L.lastChange = now;
+  evaluateDual(L);
+}
+
+// 각 언어가 자기 규칙으로 조각을 자른다.
+// 한국어: 어미(BOUNDARY) + 문장 확정 + 말 멈춤 + 최대 대기
+// 영어: 문장부호 + 말 멈춤 + 최대 대기 (어미 규칙 없음)
+function evaluateDual(L) {
+  const now = performance.now();
+  let stable = L.emitted;
+  while (stable < L.words.length && (stable < L.finalCount || now - L.since[stable] >= L.stableMs)) stable++;
+  const pending = L.words.length - L.emitted;
+  if (pending > 0) {
+    const sinceEmit = now - L.lastEmit;
+    const cut = L.korean ? lastBoundary(L, stable) : -1;
+    if (L.finalCount === L.words.length && stable === L.words.length) emitDual(L, stable, "final");
+    else if (now - L.lastChange >= L.pauseMs) emitDual(L, L.words.length, "pause");
+    else if (cut > 0 && sinceEmit >= MIN_GAP_MS) emitDual(L, cut, "boundary");
+    else if (sinceEmit >= L.maxMs && stable > L.emitted) emitDual(L, cut > 0 ? cut : stable, "max");
+  }
+  sendLivePreview(L);
+}
+
+async function emitDual(L, upto, reason) {
+  if (upto <= L.emitted) return;
+  const parts = pendingWords(L, upto);
+  L.emitted = upto;
+  L.partial = 0;
+  L.emittedChars += parts.join("").length;
+  if (!parts.length) return;
+  L.lastEmit = performance.now();
+  const text = parts.join(" ");
+  const D = dual;
+  if (!D || D.stopped) return;
+
+  if (L.side === "translate") {
+    // 영어 STT → Chrome 내장 번역 → 한국어 자막 조각
+    D.pairSeq++;
+    D.lastEnPair = D.pairSeq;
+    D.lastEnAt = performance.now();
+    let ko = text;
+    if (D.builtin) {
+      try { ko = await D.builtin.translate(text); } catch (_) {}
+      if (!ko) ko = text;
+    }
+    if (!D.stopped) send({ type: "draft", text: ko, reason, side: "translate", pair_id: D.lastEnPair, source: text });
+    // source(영어 원어)는 server.py 에서 다루지 않으므로 live.py Chunk.source 에 보관
+    // (조작자 화면에서 원어를 참고로 보여 줄 수 있음)
+  } else {
+    // 한글 STT → 통역 자막 조각
+    // 최근 영어 조각이 있으면 같은 pair_id 로 짝짓는다 (2초 내)
+    const pair = (performance.now() - D.lastEnAt < 2000) ? D.lastEnPair : ++D.pairSeq;
+    D.lastKoPair = pair;
+    send({ type: "draft", text, reason, side: "interpret", pair_id: pair });
+  }
+}
+
+function stopDual() {
+  dualGen++;
+  const D = dual;
+  if (!D) return;
+  dual = null;
+  D.stopped = true;
+  for (const L of [D.Lko, D.Len]) {
+    clearInterval(L.timer);
+    L.rec.onend = null;
+    try { L.rec.abort(); } catch (_) {}
+  }
+  D.builtin?.destroy?.();
+  D.stream.getTracks().forEach((t) => t.stop());
+  if (D.testAudio) { D.testAudio.onended = null; D.testAudio.pause(); D.testAudio.removeAttribute("src"); D.testAudio.load(); }
 }
 
 // ───────────── 서버 연결 ─────────────

@@ -157,5 +157,55 @@ class AutoSentenceBreakTest(unittest.TestCase):
         self.assertEqual(sentence_break("이미 끝났다.", "max", 0.1, "을 통하여"), "")
 
 
+class DualSttTest(unittest.TestCase):
+    """이중 STT 모드: 영어 STT+번역(side=translate)과 한글 STT(side=interpret) 조각."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.live = LiveSession(Path(self.tmp.name))
+        self.live.start()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dual_draft_with_side_and_pair(self):
+        a, _ = self.live.add_draft("영어 번역 조각", "manual", 3, side="translate", pair_id=1)
+        b, _ = self.live.add_draft("한글 통역 조각", "manual", 3, side="interpret", pair_id=1)
+        self.assertEqual(a.side, "translate")
+        self.assertEqual(b.side, "interpret")
+        self.assertEqual(a.pair_id, 1)
+        self.assertEqual(b.pair_id, 1)
+
+    def test_dual_draft_without_side_is_normal(self):
+        a, _ = self.live.add_draft("일반 조각", "manual", 3)
+        self.assertEqual(a.side, "")
+        self.assertIsNone(a.pair_id)
+
+    def test_dual_source_preserved(self):
+        a, _ = self.live.add_draft("번역된 텍스트", "manual", 3, side="translate", pair_id=1)
+        a.source = "영어 원어"
+        self.assertEqual(a.source, "영어 원어")
+
+    def test_dual_queue_view_includes_side_and_pair(self):
+        self.live.add_draft("번역", "manual", 3, side="translate", pair_id=1)
+        self.live.add_draft("통역", "manual", 3, side="interpret", pair_id=1)
+        view = self.live.queue_view()
+        self.assertEqual(view[0]["side"], "translate")
+        self.assertEqual(view[0]["pair_id"], 1)
+        self.assertEqual(view[1]["side"], "interpret")
+        self.assertEqual(view[1]["pair_id"], 1)
+
+    def test_dual_send_and_discard(self):
+        a, _ = self.live.add_draft("번역", "manual", 3, side="translate", pair_id=1)
+        b, _ = self.live.add_draft("통역", "manual", 3, side="interpret", pair_id=1)
+        # 조작자가 통역 쪽을 고름
+        self.live.send(b.id)
+        self.live.discard(a.id)
+        self.assertEqual(a.status, "discarded")
+        self.assertEqual(b.status, "sent")
+        # 자막 화면에는 고른 쪽(통역)만
+        self.assertEqual([c["text"] for c in self.live.display_view()], ["통역"])
+
+
 if __name__ == "__main__":
     unittest.main()

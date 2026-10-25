@@ -72,6 +72,10 @@ class Chunk:
     break_after: bool = False  # 조작자가 이 조각 뒤에서 줄을 바꿈 (Shift+Enter)
     kind: str = "stt"  # stt: 음성 인식 · manual: 조작자가 직접 입력 · suggest: 강사 원어의 기계 번역 제안
     source: str = ""  # suggest: 번역한 원어 (조작자 확인용)
+    # dual 모드: side = "translate"(영어 STT+번역) | "interpret"(한글 STT) | ""(일반)
+    # pair_id: 같은 문장의 두 버전(번역·통역)을 짝짓는다
+    side: str = ""
+    pair_id: int | None = None
 
 
 @dataclass
@@ -92,15 +96,18 @@ class LiveSession:
     # ───────── 조각 ─────────
 
     def add_draft(self, text: str, review: str, countdown: float, reason: str = "",
-                  auto_break: bool = False) -> tuple[Chunk | None, bool]:
-        """조각을 추가한다. auto_break 면 앞 조각의 문장 경계도 정한다. (새 조각, 이미 나간 앞 조각이 바뀌었는지)"""
+                  auto_break: bool = False, side: str = "", pair_id: int | None = None
+                  ) -> tuple[Chunk | None, bool]:
+        """조각을 추가한다. auto_break 면 앞 조각의 문장 경계도 정한다. (새 조각, 이미 나간 앞 조각이 바뀌었는지)
+        side/pair_id 는 dual 모드(영어 STT+번역 vs 한글 STT)에서 두 버전을 짝짓는 데 쓴다."""
         text = " ".join(text.split())
         if not text:
             return None, False
         self._seq += 1
         now = time.time()
         chunk = Chunk(id=self._seq, text=text, created=now, reason=reason,
-                      deadline=now + countdown if review == "auto" else None)
+                      deadline=now + countdown if review == "auto" else None,
+                      side=side, pair_id=pair_id)
         prev_changed = False
         prev = next((c for c in reversed(self.items) if c.status != "discarded"), None)
         if prev is not None and auto_break:

@@ -85,6 +85,17 @@
   .divider::after { flex: 1; order: 1; }
   .divider .btn { order: 2; }
 
+  /* dual 모드: 같은 pair_id 의 번역·통역 두 줄을 한 단위로 묶는다 */
+  .pair { display: flex; flex-direction: column; gap: 2px; margin: 6px 0; }
+  .pair .item { margin: 0; padding: 8px 12px; font-size: 16px; }
+  .pair .item.pending { margin: 0; }
+  .pair .item.side-translate { border-left: 3px solid var(--accent); }
+  .pair .item.side-interpret { border-left: 3px solid var(--ok); }
+  .pair .item.selected { background: var(--accent-soft); border-color: var(--accent); }
+  .pair .slabel { font-size: 11px; font-weight: 700; color: var(--text-3); flex-shrink: 0; width: 28px; }
+  .pair .item.side-translate .slabel { color: var(--accent); }
+  .pair .item.side-interpret .slabel { color: var(--ok); }
+
   /* 전체 멈춤 중: 목록 위에 뒤집힌 색 띠 — 지금 아무것도 자동으로 나가지 않는다는 걸 놓치지 않게 */
   #pausedBar { flex-shrink: 0; padding: 8px 20px; text-align: center; font-weight: 700; font-size: 15px;
                background: var(--text); color: var(--bg); }
@@ -178,10 +189,12 @@
       <div class="seg" id="modeSeg">
         <button type="button" data-v="normal">일반</button>
         <button type="button" data-v="interpret" title="강사와 통역사가 번갈아 말할 때 통역 언어만 받습니다">순차통역</button>
+        <button type="button" data-v="dual" title="영어 STT+번역과 한글 STT를 나란히 보여주고 고른 쪽만 자막에 냅니다">이중 STT</button>
       </div>
       <select id="mode" class="vh" tabindex="-1" aria-label="자막 방식">
         <option value="normal">일반</option>
         <option value="interpret">순차통역</option>
+        <option value="dual">이중 STT</option>
       </select>
       <label class="field" id="otherWrap" hidden><span>강사 언어 (원어)</span>
         <select id="otherLang"></select></label>
@@ -266,6 +279,8 @@ let receivedAt = performance.now();
 let focusedId = null;
 let stickToBottom = true;
 const rows = new Map();  // id → { el, input, bar, meta }
+const pairWrappers = new Map();  // pair_id → wrapper element (dual 모드)
+let dualSelected = new Map();  // pair_id → "translate" | "interpret" (조작자가 고른 쪽)
 
 // 큐 목록 안의 "검토 대기" 구분선 (모두 내보내기 버튼 포함)
 {
@@ -409,8 +424,13 @@ function renderHeader() {
   if (document.activeElement !== $("review")) $("review").value = status.review;
   if (document.activeElement !== $("mode")) $("mode").value = status.mode || "normal";
   updateLangNotes();
-  $("otherWrap").hidden = $("mode").value !== "interpret";
+  // dual 모드: 강사 언어(other_lang)도 필요
+  $("otherWrap").hidden = !$("mode").value.match(/^(interpret|dual)$/);
   $("mode").disabled = $("otherLang").disabled = !!status.live;  // 방식은 시작 전에 정한다
+  // dual 모드: 언어 레이블 조정
+  if ($("mode").value === "dual") {
+    $("langLabel").textContent = "통역 언어 (현장 통역사)";
+  }
   syncSeg("mode"); syncSeg("review");
   if (document.activeElement !== $("countdown")) $("countdown").value = status.countdown;
   $("error").textContent = status.last_error || "";
@@ -422,6 +442,13 @@ function makeRow(item) {
   const el = document.createElement("div");
   el.className = "item";
   el.dataset.id = item.id;
+  // dual 모드: side 라벨
+  if (item.side) {
+    const slabel = document.createElement("span");
+    slabel.className = "slabel";
+    slabel.textContent = item.side === "translate" ? "번역" : "통역";
+    el.append(slabel);
+  }
   const input = document.createElement("input");
   input.className = "text";
   input.value = item.text;
@@ -493,39 +520,98 @@ function makeRow(item) {
   return row;
 }
 
+function updateRow(row, item) {
+  row.el.classList.toggle("pending", item.status === "pending");
+  row.el.classList.toggle("sent", item.status === "sent");
+  row.el.classList.toggle("discarded", item.status === "discarded");
+  row.el.classList.toggle("brk", !!item.break_after);
+  row.el.classList.toggle("suggest", item.kind === "suggest");
+  row.el.classList.toggle("manual", item.kind === "manual");
+  if (item.side) row.el.classList.add("side-" + item.side);
+  if (item.kind === "suggest" && !row.srcline.isConnected) row.el.prepend(row.srcline);
+  row.srcline.textContent = item.kind === "suggest" ? `원어: ${item.source}`
+                           : (item.side === "translate" && item.source) ? `원어: ${item.source}` : "";
+  if (item.kind === "suggest" && !item.text) row.input.placeholder = "번역하지 못했습니다(Groq 키 없음 등) — 원어를 보고 직접 써 주세요";
+  row.brkmark.textContent = item.break_after ? "↵" : "";
+  if (!row.isEditing() && document.activeElement !== row.input) row.input.value = item.text;
+  row.item = item;
+  row.meta.textContent = item.kind === "suggest" && item.status === "pending" ? "⚠ 번역 제안 · 확인 필요"
+                        : item.kind === "manual" ? "직접 입력"
+                        : item.status === "sent" ? (item.edited ? "고침" : "")
+                        : item.status === "pending" ? (item.editing ? "고치는 중" : item.remaining == null ? "대기" : "") : "";
+  row.bar.parentElement.style.visibility = item.status === "pending" && item.remaining != null && !item.editing ? "visible" : "hidden";
+}
+
 function render() {
   renderHeader();
   const list = $("list");
   stickToBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 60;
   const seen = new Set();
-  items.forEach((item, index) => {
-    seen.add(item.id);
-    const row = rows.get(item.id) || makeRow(item);
-    if (!row.el.isConnected) {
-      // 직접 입력·번역 제안은 목록 중간에 끼워 들어온다. 서버 순서대로 제자리에 넣는다
-      // (이미 있는 줄은 옮기지 않는다 — 옮기면 고치던 칸의 포커스가 풀린다).
-      const next = items.slice(index + 1).map((i) => rows.get(i.id)).find((r) => r && r.el.isConnected);
-      if (next) list.insertBefore(row.el, next.el); else list.append(row.el);
+  const isDual = status.mode === "dual";
+
+  if (isDual) {
+    // dual 모드: pair_id 로 그룹핑 → 같은 pair_id 조각을 .pair 래퍼 안에 두 줄로 배치
+    const pairs = new Map();
+    for (const item of items) {
+      if (item.status === "discarded") continue;
+      if (item.pair_id == null) {
+        seen.add(item.id);
+        const row = rows.get(item.id) || makeRow(item);
+        if (!row.el.isConnected) list.append(row.el);
+        updateRow(row, item);
+        continue;
+      }
+      if (!pairs.has(item.pair_id)) pairs.set(item.pair_id, []);
+      pairs.get(item.pair_id).push(item);
     }
-    row.el.classList.toggle("pending", item.status === "pending");
-    row.el.classList.toggle("sent", item.status === "sent");
-    row.el.classList.toggle("discarded", item.status === "discarded");
-    row.el.classList.toggle("brk", !!item.break_after);
-    row.el.classList.toggle("suggest", item.kind === "suggest");
-    row.el.classList.toggle("manual", item.kind === "manual");
-    if (item.kind === "suggest" && !row.srcline.isConnected) row.el.prepend(row.srcline);
-    row.srcline.textContent = item.kind === "suggest" ? `원어: ${item.source}` : "";
-    if (item.kind === "suggest" && !item.text) row.input.placeholder = "번역하지 못했습니다(Groq 키 없음 등) — 원어를 보고 직접 써 주세요";
-    row.brkmark.textContent = item.break_after ? "↵" : "";
-    // 조작자가 고치고 있는 칸은 덮어쓰지 않는다.
-    if (!row.isEditing() && document.activeElement !== row.input) row.input.value = item.text;
-    row.item = item;
-    row.meta.textContent = item.kind === "suggest" && item.status === "pending" ? "⚠ 번역 제안 · 확인 필요"
-                         : item.kind === "manual" ? "직접 입력"
-                         : item.status === "sent" ? (item.edited ? "고침" : "")  // 나간 것은 ✓ 로 보인다
-                         : item.status === "pending" ? (item.editing ? "고치는 중" : item.remaining == null ? "대기" : "") : "";
-    row.bar.parentElement.style.visibility = item.status === "pending" && item.remaining != null && !item.editing ? "visible" : "hidden";
-  });
+    const seenPairs = new Set();
+    for (const [pairId, pairItems] of pairs) {
+      seenPairs.add(pairId);
+      let wrapper = pairWrappers.get(pairId);
+      if (!wrapper || !wrapper.isConnected) {
+        wrapper = document.createElement("div");
+        wrapper.className = "pair";
+        wrapper.dataset.pairId = pairId;
+        pairWrappers.set(pairId, wrapper);
+        list.append(wrapper);
+      }
+      wrapper.replaceChildren();
+      for (const item of pairItems) {
+        seen.add(item.id);
+        const row = rows.get(item.id) || makeRow(item);
+        const selected = dualSelected.get(pairId) === item.side;
+        row.el.classList.toggle("selected", selected && item.status === "pending");
+        wrapper.append(row.el);
+        updateRow(row, item);
+      }
+      // pair 줄 클릭 → 그 쪽 선택+내보내기, 다른 쪽 버리기
+      wrapper.onclick = (e) => {
+        const rowEl = e.target.closest(".item");
+        if (!rowEl || e.target.classList.contains("text")) return;
+        const row = rows.get(Number(rowEl.dataset.id));
+        if (!row || row.item.status !== "pending" || !row.item.side) return;
+        dualSelected.set(pairId, row.item.side);
+        for (const other of pairItems) {
+          if (other.id !== row.item.id && other.status === "pending") send({ cmd: "discard", id: other.id });
+        }
+        send({ cmd: "send", id: row.item.id, text: row.input.value });
+      };
+    }
+    for (const [pairId, wrapper] of pairWrappers) {
+      if (!seenPairs.has(pairId)) { wrapper.remove(); pairWrappers.delete(pairId); dualSelected.delete(pairId); }
+    }
+  } else {
+    // 일반·순차통역: 기존 렌더링
+    items.forEach((item, index) => {
+      seen.add(item.id);
+      const row = rows.get(item.id) || makeRow(item);
+      if (!row.el.isConnected) {
+        const next = items.slice(index + 1).map((i) => rows.get(i.id)).find((r) => r && r.el.isConnected);
+        if (next) list.insertBefore(row.el, next.el); else list.append(row.el);
+      }
+      updateRow(row, item);
+    });
+  }
   for (const [id, row] of rows) if (!seen.has(id)) { row.el.remove(); rows.delete(id); }
   // "검토 대기" 구분선: 첫 대기 조각 바로 앞에 둔다(없으면 맨 끝)
   const firstPending = items.map((i) => rows.get(i.id)).find((r) => r && r.item.status === "pending");
@@ -633,13 +719,16 @@ $("countdown").onchange = () => save({ countdown: Number($("countdown").value) }
 $("mic").onchange = () => save({ mic: $("mic").value });
 $("lang").onchange = () => { updateLangNotes(); save({ lang: $("lang").value }); };
 
-// 자막(통역) 언어에 따라 안내를 바꾼다: 순차통역이면 "통역 언어", 한국어가 아니면 한국어 전용 기능 안내
+// 자막(통역) 언어에 따라 안내를 바꾼다: 순차통역·dual 이면 "통역 언어", 한국어가 아니면 한국어 전용 기능 안내
 function updateLangNotes() {
   const korean = isKorean($("lang").value);
-  $("langLabel").textContent = $("mode").value === "interpret" ? "통역 언어 (통역사가 말하는 언어)" : "자막 언어";
+  const mode = $("mode").value;
+  $("langLabel").textContent = mode === "interpret" ? "통역 언어 (통역사가 말하는 언어)"
+                               : mode === "dual" ? "통역 언어 (현장 통역사)" : "자막 언어";
   $("langNote").hidden = korean;
-  $("autobreak").disabled = !korean;
+  $("autobreak").disabled = !korean || mode === "dual";
   if (!korean) $("autobreak").title = "자동 줄바꿈은 한국어 전용입니다";
+  else if (mode === "dual") $("autobreak").title = "이중 STT 모드에서는 자동 줄바꿈을 쓸 수 없습니다";
 }
 $("engine").onchange = () => save({ engine: $("engine").value });
 $("processing").onchange = () => save({ voice_processing: $("processing").value === "true" });
