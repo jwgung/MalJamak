@@ -95,6 +95,10 @@
   .pair .slabel { font-size: 11px; font-weight: 700; color: var(--text-3); flex-shrink: 0; width: 28px; }
   .pair .item.side-translate .slabel { color: var(--accent); }
   .pair .item.side-interpret .slabel { color: var(--ok); }
+  /* dual 모드: 1·2 번호키 선택 표시 */
+  .pair .numkey { font-size: 11px; font-weight: 700; color: var(--text-3); border: 1px solid var(--line);
+                  border-radius: 4px; padding: 0 5px; margin-right: 6px; flex-shrink: 0; }
+  .pair .item.selected .numkey { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
   /* 전체 멈춤 중: 목록 위에 뒤집힌 색 띠 — 지금 아무것도 자동으로 나가지 않는다는 걸 놓치지 않게 */
   #pausedBar { flex-shrink: 0; padding: 8px 20px; text-align: center; font-weight: 700; font-size: 15px;
@@ -180,7 +184,7 @@
         <input id="manual" type="text" placeholder="직접 입력 — 빠진 말을 쓰고 Enter 로 바로 내보내기">
         <span id="manualAt"></span>
       </div>
-      <div id="keys"><kbd>Enter</kbd> 내보내기 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기 · <kbd>Ctrl+Space</kbd> 멈춤</div>
+      <div id="keys"><kbd>Enter</kbd> 내보내기 · <kbd>1</kbd><kbd>2</kbd> 번역/통역 선택 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기 · <kbd>Ctrl+Space</kbd> 멈춤</div>
     </div>
   </div>
   <aside class="panel" id="panel">
@@ -257,7 +261,8 @@
   <div class="box card" role="dialog" aria-label="단축키">
     <h2>단축키</h2>
     <dl>
-      <dt><kbd>Enter</kbd></dt><dd>내보내기 (고친 내용 포함)</dd>
+      <dt><kbd>Enter</kbd></dt><dd>내보내기 (고친 내용 포함) — 이중 STT에서는 선택된 쪽(미선택 시 번역)</dd>
+      <dt><kbd>1</kbd> <kbd>2</kbd></dt><dd>이중 STT: 번역 / 통역 선택</dd>
       <dt><kbd>Shift</kbd>+<kbd>Enter</kbd></dt><dd>내보내고 줄바꿈 (나간 조각에서는 줄바꿈 켜기/끄기)</dd>
       <dt><kbd>Esc</kbd></dt><dd>버리기</dd>
       <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>조각 이동</dd>
@@ -442,12 +447,17 @@ function makeRow(item) {
   const el = document.createElement("div");
   el.className = "item";
   el.dataset.id = item.id;
-  // dual 모드: side 라벨
+  // dual 모드: 번호키(1/2) + side 라벨
   if (item.side) {
     const slabel = document.createElement("span");
     slabel.className = "slabel";
     slabel.textContent = item.side === "translate" ? "번역" : "통역";
     el.append(slabel);
+    const numkey = document.createElement("span");
+    numkey.className = "numkey";
+    numkey.textContent = item.side === "translate" ? "1" : "2";
+    numkey.title = item.side === "translate" ? "1 키: 번역 선택" : "2 키: 통역 선택";
+    el.append(numkey);
   }
   const input = document.createElement("input");
   input.className = "text";
@@ -576,6 +586,8 @@ function render() {
         list.append(wrapper);
       }
       wrapper.replaceChildren();
+      // pending 인 pair 일 때만 번호키·클릭 선택을 활성화
+      const hasPending = pairItems.some((i) => i.status === "pending");
       for (const item of pairItems) {
         seen.add(item.id);
         const row = rows.get(item.id) || makeRow(item);
@@ -584,17 +596,14 @@ function render() {
         wrapper.append(row.el);
         updateRow(row, item);
       }
-      // pair 줄 클릭 → 그 쪽 선택+내보내기, 다른 쪽 버리기
+      // pair 줄 클릭 → 그 쪽 선택 (내보내기는 Enter)
       wrapper.onclick = (e) => {
         const rowEl = e.target.closest(".item");
         if (!rowEl || e.target.classList.contains("text")) return;
         const row = rows.get(Number(rowEl.dataset.id));
         if (!row || row.item.status !== "pending" || !row.item.side) return;
         dualSelected.set(pairId, row.item.side);
-        for (const other of pairItems) {
-          if (other.id !== row.item.id && other.status === "pending") send({ cmd: "discard", id: other.id });
-        }
-        send({ cmd: "send", id: row.item.id, text: row.input.value });
+        render();
       };
     }
     for (const [pairId, wrapper] of pairWrappers) {
@@ -613,11 +622,24 @@ function render() {
     });
   }
   for (const [id, row] of rows) if (!seen.has(id)) { row.el.remove(); rows.delete(id); }
-  // "검토 대기" 구분선: 첫 대기 조각 바로 앞에 둔다(없으면 맨 끝)
-  const firstPending = items.map((i) => rows.get(i.id)).find((r) => r && r.item.status === "pending");
+  // "검토 대기" 구분선: 첫 대기 조각(또는 dual 모드에서 첫 대기 pair) 바로 앞에 둔다(없으면 맨 끝)
   const divider = $("divider");
-  if (firstPending) { if (divider.nextSibling !== firstPending.el) list.insertBefore(divider, firstPending.el); }
-  else if (divider.parentNode !== list || divider.nextSibling) list.append(divider);
+  let dividerBefore = null;
+  if (isDual) {
+    // dual: 첫 pending 조각이 속한 pair 래퍼를 찾는다
+    const firstPendingItem = items.find((i) => i.status === "pending" && i.pair_id != null);
+    if (firstPendingItem) dividerBefore = pairWrappers.get(firstPendingItem.pair_id) || null;
+    else {
+      const fp = items.map((i) => rows.get(i.id)).find((r) => r && r.item.status === "pending");
+      dividerBefore = fp ? fp.el : null;
+    }
+  } else {
+    const firstPending = items.map((i) => rows.get(i.id)).find((r) => r && r.item.status === "pending");
+    dividerBefore = firstPending ? firstPending.el : null;
+  }
+  if (dividerBefore && dividerBefore.isConnected && dividerBefore.parentElement === list) {
+    if (divider.nextSibling !== dividerBefore) list.insertBefore(divider, dividerBefore);
+  } else if (divider.parentNode !== list || divider.nextSibling) list.append(divider);
   // 포커스 관리: 설정 칸 등 다른 곳을 만지는 중이면 건드리지 않는다.
   const active = document.activeElement;
   const nothingFocused = !active || active === document.body;
@@ -763,8 +785,59 @@ function togglePause() {
 }
 $("btnPause").onclick = togglePause;
 $("btnDisplay").onclick = () => fetch("/live/display-window", { method: "POST" });
+// dual 모드: 포커스된 pair 의 1(번역)·2(통역) 번호키로 선택, Enter 로 내보내기
+function focusedPair() {
+  if (status.mode !== "dual") return null;
+  const row = rows.get(focusedId);
+  if (!row || !row.item || row.item.pair_id == null) return null;
+  const pairId = row.item.pair_id;
+  const wrapper = pairWrappers.get(pairId);
+  if (!wrapper || !wrapper.isConnected) return null;
+  const pairItems = items.filter((i) => i.pair_id === pairId && i.status === "pending");
+  if (!pairItems.length) return null;
+  return { pairId, wrapper, pairItems };
+}
+
+function dualSendSelected(pairId) {
+  const side = dualSelected.get(pairId);
+  const item = items.find((i) => i.pair_id === pairId && i.side === side && i.status === "pending");
+  if (!item) return false;
+  const row = rows.get(item.id);
+  for (const other of items.filter((i) => i.pair_id === pairId && i.status === "pending" && i.id !== item.id)) {
+    send({ cmd: "discard", id: other.id });
+  }
+  send({ cmd: "send", id: item.id, text: row ? row.input.value : item.text });
+  moveFocus(1, true);
+  return true;
+}
+
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.target.classList?.contains("text")) { e.preventDefault(); sendAll(); }
+  // 텍스트 입력칸 안에서 쓰면 number·Enter 가 조각 조작으로 새지 않게
+  const inText = e.target.classList?.contains("text") || e.target.id === "manual";
+
+  // dual: 1·2 번으로 번역/통역 선택 (텍스트 편집 중이면 무시)
+  if (status.mode === "dual" && !inText && (e.key === "1" || e.key === "2")) {
+    const fp = focusedPair();
+    if (fp) {
+      e.preventDefault();
+      const side = e.key === "1" ? "translate" : "interpret";
+      dualSelected.set(fp.pairId, side);
+      // 선택된 쪽이 없으면(통역이 안 온 pair 등) 그대로
+      render();
+      return;
+    }
+  }
+  // dual: Enter → 선택된 쪽 내보내기 (미선택이면 번역 우선)
+  if (status.mode === "dual" && !inText && e.key === "Enter" && !e.shiftKey && !e.ctrlKey) {
+    const fp = focusedPair();
+    if (fp) {
+      e.preventDefault();
+      if (!dualSelected.has(fp.pairId)) dualSelected.set(fp.pairId, "translate");
+      if (dualSendSelected(fp.pairId)) return;
+    }
+  }
+
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !inText) { e.preventDefault(); sendAll(); }
   // 전체 일시정지 — 조각을 고치는 중에도(입력칸 안에서도) 쓸 수 있게 문서 전체에서 받는다
   if ((e.code === "Space" || e.key === " ") && (e.ctrlKey || e.metaKey)) { e.preventDefault(); togglePause(); }
 });
