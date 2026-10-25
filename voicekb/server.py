@@ -428,6 +428,7 @@ class Hub:
         return self.mics
 
     async def apply_settings(self, patch: dict) -> dict:
+        old_review = self.config.get()["live"]["review"]
         cfg = self.config.update(patch)
         self._apply_groq(cfg)
         if cfg["live"]["review"] != old_review:
