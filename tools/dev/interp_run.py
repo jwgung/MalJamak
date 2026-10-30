@@ -4,7 +4,7 @@ URL, SECONDS, OUT = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 PORT = int(sys.argv[4]) if len(sys.argv) > 4 else 8765
 async def main():
     async with aiohttp.ClientSession() as s:
-        await s.post(f"http://localhost:{PORT}/api/settings", json={"live": {"mode": "interpret", "other_lang": "en-US", "review": "auto", "countdown": 1}})
+        await s.post(f"http://localhost:{PORT}/api/settings", json={"live": {"mode": "interpret", "engine": "cloud", "other_lang": "en-US", "review": "auto", "countdown": 1}})
         op = await s.ws_connect(f"http://localhost:{PORT}/ws?role=operator")
         state = {"items": [], "other": [], "test": {}}
         async def read():

@@ -13,7 +13,7 @@ PORT = int(sys.argv[4]) if len(sys.argv) > 4 else 8765
 async def main():
     async with aiohttp.ClientSession() as s:
         await s.post(f"http://localhost:{PORT}/api/settings",
-                     json={"live": {"mode": "dual", "lang": "ko-KR", "other_lang": "en-US", "review": "manual"}})
+                     json={"live": {"mode": "dual", "engine": "cloud", "lang": "ko-KR", "other_lang": "en-US", "review": "manual"}})
         op = await s.ws_connect(f"http://localhost:{PORT}/ws?role=operator")
         state = {"items": [], "test": {}}
 

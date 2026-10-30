@@ -169,7 +169,7 @@ async function flushSentence(c) {
   c.lines.push(line);
   if (c.lines.length > MAX_LINES) c.lines.shift();
   c.live = null;
-  if (c.useGroq) send({ type: "translate", id: line.id, text: src, source: c.lang, target: c.targetLang, context });
+  if (useGroq(c)) send({ type: "translate", id: line.id, text: src, source: c.lang, target: c.targetLang, context });
   if (c.builtin) {
     const ko = await c.builtin.translate(src).catch(() => "");
     if (!line.groq) line.ko = ko;
@@ -185,6 +185,10 @@ function applyGroqTranslation(id, ko) {
   publish(cap);
 }
 
+function useGroq(c) {
+  return c.translate && c.groqAvailable && (c.translator === "groq" || (c.translator === "auto" && !c.builtin));
+}
+
 async function startCaptions(lang, translator, groqAvailable, local, translate = true, targetLang = "ko-KR") {
   stopCaptions();
   const gen = capGen;
@@ -193,22 +197,23 @@ async function startCaptions(lang, translator, groqAvailable, local, translate =
     catch (err) { if (gen === capGen) send({ type: "captions_stopped", reason: err.message }); return; }
   }
   const source = lang.split("-")[0];
-  let builtin = null;
-  if (translate && (translator === "auto" || translator === "builtin")) {
-    try { builtin = await createBuiltinTranslator(source, targetLang.split("-")[0]); }
-    catch (err) { report("translator", err.message); }
-  }
-  const useGroq = translate && groqAvailable && (translator === "groq" || (translator === "auto" && !builtin));
-  if (gen !== capGen) { builtin?.destroy?.(); return; }
+  if (gen !== capGen) return;
 
   // 서버가 보내는 PCM 을 오디오 트랙으로 만든다.
   const generator = new MediaStreamTrackGenerator({ kind: "audio" });
   const writer = generator.writable.getWriter();
   const r = newRecognition(lang);
   if (local) r.processLocally = true;
-  const c = { rec: r, generator, writer, builtin, useGroq, translate, lang, targetLang, lines: [], live: null,
+  const c = { rec: r, generator, writer, builtin: null, translator, groqAvailable, translate, lang, targetLang, lines: [], live: null,
               buffer: "", flushTimer: null, timestamp: 0, liveSeq: 0 };
   cap = c;
+  // 내장 번역기는 기다리지 않고 따로 만든다 — 모델이 없으면 create() 가 실패하기까지 10초쯤 걸려 그동안 말을 놓친다.
+  // 만들어지기 전(또는 실패하면) 자동 방식은 Groq 로 번역한다.
+  if (translate && (translator === "auto" || translator === "builtin")) {
+    createBuiltinTranslator(source, targetLang.split("-")[0])
+      .then((t) => { if (cap === c) c.builtin = t; else t?.destroy?.(); })
+      .catch((err) => report("translator", err.message));
+  }
 
   const restarter = makeRestarter(() => cap === c, () => r.start(generator), () => {
     stopCaptions();
