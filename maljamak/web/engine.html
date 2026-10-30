@@ -742,8 +742,9 @@ async function startDual(msg, stream, testAudio) {
 
   // Chrome 내장 번역기 (강사 언어 → 통역 언어). 없으면 원문 그대로 보낸다.
   // 만들기를 기다리지 않고 인식부터 시작한다 — 모델이 없으면 create() 가 실패하기까지 10초쯤 걸려 그동안 말을 놓친다.
+  // 만들어지기 전에 나온 강사 말은 원어 그대로 번역 줄에 보낸다(줄이 막히지 않게).
   const D = { builtin: null, turn: 1, lastSide: "", queue: Promise.resolve() };
-  D.queue = createBuiltinTranslator(other.split("-")[0], target.split("-")[0])
+  createBuiltinTranslator(other.split("-")[0], target.split("-")[0])
     .then((t) => { if (dual === D) D.builtin = t; else t?.destroy?.(); })
     .catch((err) => report("dual-translator", err.message));
   dual = D;
