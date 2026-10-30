@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import struct
 import time
 from collections.abc import Callable
 
@@ -24,6 +25,12 @@ from .paste import Paster
 def _base(code: str) -> str:
     """언어 코드의 앞부분 (ko-KR → ko). 같은 언어인지 비교할 때 쓴다."""
     return str(code or "").split("-")[0].lower()
+
+
+def pack_audio(pcm16: bytes, rate: int, channels: int) -> bytes:
+    """엔진으로 보내는 소리 프레임: 샘플레이트(u32le) + 채널 수(u16le) + 0(u16) + s16le 인터리브 PCM.
+    engine.html 의 pushAudio 와 짝이다."""
+    return struct.pack("<IHH", rate, channels, 0) + pcm16
 
 
 class Hub:
@@ -396,15 +403,15 @@ class Hub:
         self._caption_file.parent.mkdir(parents=True, exist_ok=True)
         self._caption_file.write_text("\n".join(out) + "\n", encoding="utf-8")
 
-    def push_audio(self, pcm16: bytes) -> None:
-        """시스템 소리 캡처 스레드에서 호출. 16kHz mono s16le."""
+    def push_audio(self, pcm16: bytes, rate: int, channels: int) -> None:
+        """시스템 소리 캡처 스레드에서 호출. s16le 인터리브. 엔진에는 형식 머리(8바이트)를 붙여 보낸다."""
         if self.loop and self.engine is not None and self.captions_on:
-            self.loop.call_soon_threadsafe(self._send_audio, pcm16)
+            self.loop.call_soon_threadsafe(self._send_audio, pack_audio(pcm16, rate, channels))
 
-    def _send_audio(self, pcm16: bytes) -> None:
+    def _send_audio(self, frame: bytes) -> None:
         ws = self.engine
         if ws is not None and not ws.closed:
-            asyncio.ensure_future(ws.send_bytes(pcm16))
+            asyncio.ensure_future(ws.send_bytes(frame))
 
     async def _translate(self, ws: web.WebSocketResponse, data: dict) -> None:
         if not self.groq:

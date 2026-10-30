@@ -49,7 +49,7 @@
 ## 핵심 설계 결정과 근거
 
 - **엔진 = 숨긴(headless) Chrome 의 Web Speech API.** 무료이고 구글 클라우드 품질. Linux 헤드리스 + 가짜 마이크로 동작 확인, Windows CI 에서 설치본 엔진 연결 확인.
-- **오디오는 트랙으로 넣는다** (`SpeechRecognition.start(track)`, Chrome 135+). 마이크 선택, 시스템 소리(Python soundcard loopback → MediaStreamTrackGenerator), 테스트 영상(audio.captureStream) 모두 같은 경로.
+- **오디오는 트랙으로 넣는다** (`SpeechRecognition.start(track)`, Chrome 135+). 마이크 선택, 시스템 소리(Python 캡처 → MediaStreamTrackGenerator. Windows 는 PyAudioWPatch WASAPI loopback 을 장치 형식 그대로, macOS·Linux 는 soundcard 16kHz 모노. 프레임마다 8바이트 형식 머리 `server.pack_audio`), 테스트 영상(audio.captureStream) 모두 같은 경로.
 - **Groq 은 확정 문장에만.** 교정은 적극적 프롬프트가 보수적보다 나음(단어장은 v0.6.1 에서 사용자 결정으로 제거). 20B/120B 속도 차이 0.1~0.2초라 120B 기본.
 - **조각 나누기**: 문장 확정 → 말 멈춤(0.7초) → 어미(~다, ~요, ~고, ~는데 …) → 최대 대기(4초). 내보낸 위치는 단어 수가 아니라 글자 수로 기억(Chrome 이 확정할 때 단어를 합치거나 나눈다).
 - **세션이 끊기면 아직 확정 안 된 말까지 조각으로 넘긴다** (네트워크 오류 때 문장 유실 방지).
@@ -74,6 +74,7 @@
 - v0.5~0.6 새 화면(교정 ⚙ 패널·설정 탭·드롭다운 모양)을 Windows Chrome 에서
 - 한국어 → 영어 등 번역할 언어를 바꾼 PC 소리 자막의 실제 품질, 같은 글자 체계 언어 쌍의 순차통역
 - PC 소리 자막 창(tkinter)의 휠 스크롤·표시·v0.5 글꼴/색/마우스 올림 안내 — 이 서버엔 tkinter 가 없어 미실행
+- 설치 파일 군살 빼기 후 Windows 시스템 소리 캡처(`soundcard` → `PyAudioWPatch` WASAPI loopback, 장치 형식 그대로 보내고 엔진이 리샘플) — 이 서버에선 가짜 pyaudiowpatch 로 48kHz 스테레오·무음 채우기까지만 확인
 - 번역 모델 받기 창에서 끝까지 받아지는지, 받은 뒤 내장 번역으로 자막이 나오는지
 - v0.7 조작자 키: Windows 에서 `Ctrl+Space` 가 한/영·입력기 전환과 겹치는지(겹치면 다른 키로), ⏸ 멈춤 중 카운트다운이 멈췄다가 다시 흐를 때 새로 시작되는지
 - v0.7.2 교정 화면(어두운 테마, 지금 조각만 크게)이 실제 현장 속도에서 한눈에 들어오는지, 강사 원어 칸 손잡이 끌기

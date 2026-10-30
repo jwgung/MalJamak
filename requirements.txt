@@ -2,9 +2,10 @@ aiohttp>=3.9
 pyperclip>=1.8
 pystray>=0.19
 pillow>=10
-soundcard>=0.4
-numpy>=1.24
 psutil>=5.9
+# 시스템 소리 캡처: Windows 는 PyAudioWPatch(WASAPI loopback), macOS·Linux 는 soundcard(+numpy)
+PyAudioWPatch>=0.2.12; sys_platform == "win32"
+soundcard>=0.4; sys_platform != "win32"
+numpy>=1.24; sys_platform != "win32"
 # Linux 는 xdotool/wtype/ydotool 로 붙여넣는다. X11 전역 단축키가 필요할 때만 pynput 을 따로 설치.
 pynput>=1.7; sys_platform != "linux"
-yt-dlp>=2025.1

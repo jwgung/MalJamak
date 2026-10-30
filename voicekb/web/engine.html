@@ -126,7 +126,6 @@ const MAX_LINES = 2;
 const FLUSH_SILENCE_MS = 1200;
 const FLUSH_MAX_CHARS = 160;
 const SENTENCE_END = /[.!?。！？]$/;
-const SAMPLE_RATE = 16000;
 
 let cap = null;
 let capGen = 0;
@@ -236,12 +235,18 @@ async function startCaptions(lang, translator, groqAvailable, local, translate =
 
 function pushAudio(buf) {
   const c = cap;
-  if (!c) return;
-  const frames = buf.byteLength / 2;
-  const data = new AudioData({ format: "s16", sampleRate: SAMPLE_RATE, numberOfFrames: frames,
-                               numberOfChannels: 1, timestamp: c.timestamp, data: buf });
-  c.timestamp += Math.round((frames / SAMPLE_RATE) * 1e6);
-  c.writer.write(data).catch((err) => report("audio", err.message));
+  if (!c || buf.byteLength < 8) return;
+  // 서버 pack_audio: 샘플레이트(u32le) + 채널 수(u16le) + 0(u16) + s16le 인터리브 PCM
+  const head = new DataView(buf, 0, 8);
+  const sampleRate = head.getUint32(0, true), channels = head.getUint16(4, true);
+  const frames = (buf.byteLength - 8) / 2 / channels;
+  if (sampleRate < 8000 || sampleRate > 192000 || !channels || channels > 8 || !Number.isInteger(frames) || !frames) return;
+  try {
+    const data = new AudioData({ format: "s16", sampleRate, numberOfFrames: frames,
+                                 numberOfChannels: channels, timestamp: c.timestamp, data: new Uint8Array(buf, 8) });
+    c.timestamp += Math.round((frames / sampleRate) * 1e6);
+    c.writer.write(data).catch((err) => report("audio", err.message));
+  } catch (err) { report("audio", err.message); }
 }
 
 function stopCaptions() {

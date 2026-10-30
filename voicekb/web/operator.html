@@ -348,7 +348,8 @@ function renderTest() {
   const t = status.test || { status: "idle" };
   const el = $("testState");
   el.className = `hint ${t.status}`;
-  el.textContent = { idle: "", downloading: `받는 중… ${t.progress || 0}%`,
+  el.textContent = { idle: "", downloading: t.step === "tool" ? `내려받기 도구 준비 중… ${t.progress || 0}%`
+                                                               : `받는 중… ${t.progress || 0}%`,
                      ready: `준비됨: ${t.title || ""} (${fmtTime(t.duration)})`, error: `실패: ${t.error || ""}` }[t.status] || "";
   $("btnTestLoad").disabled = t.status === "downloading";
   const player = $("testPlayer");

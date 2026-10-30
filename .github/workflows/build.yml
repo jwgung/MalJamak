@@ -43,6 +43,18 @@ jobs:
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\installer.iss
           Get-ChildItem dist\VoiceKeyboard-Setup-*.exe | ForEach-Object { "SETUP=$($_.FullName)" >> $env:GITHUB_ENV }
 
+      # 설치 파일이 무거워지지 않았는지 보려고 크기와 묶음 폴더의 큰 항목을 남긴다.
+      - name: Size report
+        shell: pwsh
+        run: |
+          "설치 파일: {0:N1} MB" -f ((Get-Item $env:SETUP).Length / 1MB)
+          $dir = "dist\VoiceKeyboard"
+          "묶음 폴더: {0:N1} MB" -f ((Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
+          Get-ChildItem "$dir\_internal" | ForEach-Object {
+            $size = if ($_.PSIsContainer) { (Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum } else { $_.Length }
+            [pscustomobject]@{ MB = [math]::Round($size / 1MB, 2); Name = $_.Name }
+          } | Sort-Object MB -Descending | Select-Object -First 15 | Format-Table -AutoSize
+
       # 설치 파일을 조용히 설치하고, 설치된 exe 를 트레이 없이 띄워 숨긴 Chrome 엔진이 붙는지 확인한다.
       - name: Smoke test (installed)
         shell: pwsh
