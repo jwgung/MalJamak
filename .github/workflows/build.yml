@@ -28,6 +28,8 @@ jobs:
         run: pip install -r requirements.txt pyinstaller
 
       - name: Python unit tests
+        env:
+          PYTHONIOENCODING: utf-8  # 한글 로그 출력 (설치본은 UTF-8 로그 파일로 보낸다)
         run: python -m unittest discover tests
 
       - name: Build
