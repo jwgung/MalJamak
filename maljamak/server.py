@@ -595,7 +595,8 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             kind = data.get("type")
             if kind == "final":
-                text = str(data.get("text", "")).strip()
+                text = data.get("text")
+                text = text.strip() if isinstance(text, str) else ""
                 if text and hub.accepts_final():
                     hub._finals.put_nowait(text)
             elif kind == "input_stopped":
@@ -604,7 +605,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 hub.last_error = data.get("reason", "")
                 await hub._changed()
             elif kind == "draft":
-                await hub.on_draft(data.get("text", ""), data.get("reason", ""),
+                if not isinstance(data.get("text"), str):
+                    continue
+                await hub.on_draft(data["text"], str(data.get("reason", "")),
                                    side=data.get("side", ""), pair_id=data.get("pair_id"),
                                    source=data.get("source", ""), eid=data.get("eid"))
             elif kind == "revise":
@@ -675,7 +678,7 @@ async def toggle_handler(request: web.Request) -> web.Response:
 
 
 def mask_key(key: str) -> str:
-    """API 키를 앞 4자·끝 4자만 보이게 가린다 (gsk_••••••••3f9a). 전체 키는 화면에 보내지 않는다."""
+    """API 키를 앞 4자·끝 4자만 보이게 가린다 (gsk_••••••••••••3f9a). 전체 키는 화면에 보내지 않는다."""
     if not key:
         return ""
     if len(key) <= 10:

@@ -10,6 +10,27 @@ from maljamak import config
 from maljamak.config import Config
 
 
+class LiveDefaultsTest(unittest.TestCase):
+    """v0.8.x 기본값은 새 설치에만 쓰고, 예전 설정 파일에 저장된 값은 그대로 둔다."""
+
+    def load(self, raw: dict | None) -> dict:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            if raw is not None:
+                path.write_text(json.dumps(raw), encoding="utf-8")
+            return Config(path).get()["live"]
+
+    def test_new_install_defaults(self):
+        live = self.load(None)
+        self.assertEqual((live["pause_seconds"], live["max_wait_seconds"], live["countdown"]), (0.6, 3.0, 2.0))
+        self.assertEqual((live["chunk"], live["display_screen"], live["engine"]), ("short", "auto", "cloud"))
+
+    def test_saved_values_kept(self):
+        live = self.load({"live": {"pause_seconds": 0.7, "max_wait_seconds": 4.0, "countdown": 3.0}})
+        self.assertEqual((live["pause_seconds"], live["max_wait_seconds"], live["countdown"]), (0.7, 4.0, 3.0))
+        self.assertEqual(live["chunk"], "short")  # 새 키는 기본값으로 채운다
+
+
 class CaptionTranslateMigrationTest(unittest.TestCase):
     """v0.3 이전에는 PC 소리 자막이 늘 번역이었다. 외국어로 저장된 설정은 번역을 켠 채 이어받는다."""
 
