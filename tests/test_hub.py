@@ -115,6 +115,29 @@ class WhisperEngineTest(HubTestCase):
         await self.drain_stt()
         self.assertEqual([c.text for c in self.hub.live.items], ["새 세션"])
 
+    async def test_worker_survives_unexpected_error(self):
+        self.config.update({"live": {"engine": "whisper", "review": "manual"}})
+
+        class Broken(FakeGroq):
+            async def transcribe(self, *args):
+                if not self.calls:
+                    self.calls.append(args)
+                    raise TypeError("이상한 응답")
+                return "다음 토막"
+        self.hub.groq = Broken([])
+        await self.hub.set_live(True)
+        self.hub.on_stt_audio(WAV)
+        self.hub.on_stt_audio(WAV)
+        await self.drain_stt()
+        self.assertEqual([c.text for c in self.hub.live.items], ["다음 토막"])
+
+    async def test_non_string_operator_text_ignored(self):
+        await self.hub.set_live(True)
+        await self.hub.on_draft("조각", "pause")
+        chunk = self.hub.live.items[0]
+        await self.hub.on_operator({"cmd": "send", "id": chunk.id, "text": 5})
+        self.assertEqual((chunk.status, chunk.text), ("sent", "조각"))
+
     async def test_failed_segment_reports_error(self):
         self.config.update({"live": {"engine": "whisper"}})
         self.hub.groq = FakeGroq([None])

@@ -19,12 +19,18 @@ _HALLUCINATION = re.compile(
 
 def whisper_text(data: dict, no_speech: float = 0.6, min_logprob: float = -1.0) -> str:
     """verbose_json 응답에서 말소리가 아닐 가능성이 높거나 확신이 아주 낮은 구간을 빼고 글을 잇는다."""
+    if not isinstance(data, dict):
+        return ""
     segments = data.get("segments")
-    if segments is None:
+    if not isinstance(segments, list):
         text = str(data.get("text") or "")
     else:
-        text = " ".join(str(s.get("text") or "").strip() for s in segments
-                        if s.get("no_speech_prob", 0) <= no_speech and s.get("avg_logprob", 0) >= min_logprob)
+        def keep(s) -> bool:
+            try:
+                return float(s.get("no_speech_prob", 0)) <= no_speech and float(s.get("avg_logprob", 0)) >= min_logprob
+            except (TypeError, ValueError):
+                return False
+        text = " ".join(str(s.get("text") or "").strip() for s in segments if isinstance(s, dict) and keep(s))
     text = " ".join(text.split())
     return "" if _HALLUCINATION.match(text) else text
 
@@ -117,7 +123,7 @@ class Groq:
             user = "직전 자막(참고용, 번역하지 말 것):\n" + "\n".join(context) + "\n\n번역할 문장:\n" + text
         return await self._chat(translate_prompt(source, target), user)
 
-    async def transcribe(self, wav: bytes, lang: str, prompt: str = "", model: str = "whisper-large-v3") -> str | None:
+    async def transcribe(self, wav: bytes, lang: str, prompt: str, model: str) -> str | None:
         """현장 자막 대체 엔진: 말 한 토막(WAV)을 Whisper 로 받아쓴다. prompt 는 직전 자막(이어지는 말투·고유명사 표기).
         한도(429)에 걸리면 알려 준 시간(최대 10초)만큼 기다렸다가 한 번 더 보낸다 — 문장이 통째로 빠지지 않게."""
         if self._session is None:

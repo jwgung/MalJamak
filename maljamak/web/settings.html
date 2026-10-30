@@ -358,7 +358,6 @@ $("#btnTranslator").onclick = async () => {
 };
 $("#btnCaptions").onclick = () => fetch("/captions/toggle", { method: "POST" });
 
-// ── 단축키 눌러서 지정 ──
 // ── 단축키 변환 시작
 // 브라우저 키 이벤트를 pynput 단축키 형식(<ctrl>+<alt>+<space>)으로 바꾼다. 자판 배열·한글 입력 상태와 무관하게 e.code 를 쓴다.
 // 돌려주는 값: { combo } 또는 { error } 또는 null(아직 수식키만 누름)

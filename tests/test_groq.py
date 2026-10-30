@@ -24,6 +24,10 @@ class WhisperTextTest(unittest.TestCase):
         self.assertEqual(whisper_text({"text": "감사합니다"}), "감사합니다")  # 실제로도 하는 말
         self.assertEqual(whisper_text({"text": "오늘 MBC 뉴스를 봤습니다"}), "오늘 MBC 뉴스를 봤습니다")
 
+    def test_malformed_response_does_not_raise(self):
+        self.assertEqual(whisper_text([]), "")
+        self.assertEqual(whisper_text({"segments": [None, seg(" 남는 말"), {"text": "x", "no_speech_prob": "high"}]}), "남는 말")
+
     def test_plain_text_response(self):
         self.assertEqual(whisper_text({"text": "  공백   정리  "}), "공백 정리")
 

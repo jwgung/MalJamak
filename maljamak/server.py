@@ -27,8 +27,12 @@ def _base(code: str) -> str:
     return str(code or "").split("-")[0].lower()
 
 
-STT_QUEUE_MAX = 20  # Whisper 토막이 밀릴 때 쌓아 두는 최대 개수 (토막당 최대 수백 KB)
-WS_MAX_MSG = 5 * 1024 * 1024  # WebSocket 한 메시지 최대 크기 (Whisper 토막 4MB + 여유)
+STT_QUEUE_MAX = 20  # Whisper 토막이 밀릴 때 쌓아 두는 최대 개수 (10초 토막은 약 320KB)
+STT_WAV_MAX = 4 * 1024 * 1024  # 받는 Whisper 토막 최대 크기
+WS_MAX_MSG = STT_WAV_MAX + 1024 * 1024  # WebSocket 한 메시지 최대 크기
+STT_FLUSH_GRACE = 3.0  # 자막을 멈춘 뒤에도 엔진이 보내는 마지막 토막을 받는 시간(초)
+STT_PROMPT_CHARS = 120  # 다음 토막에 힌트로 주는 직전 자막 길이 (Whisper 프롬프트는 224토큰까지)
+EID_KEEP = 50  # "인식이 바뀜"을 달 수 있는 최근 조각 수 (엔진은 최근 8개만 지켜본다)
 
 
 def pack_audio(pcm16: bytes, rate: int, channels: int) -> bytes:
@@ -289,7 +293,7 @@ class Hub:
             self.live_on = False
             self.live_test = False
             if self.live_whisper:
-                self._stt_accept_until = time.monotonic() + 3
+                self._stt_accept_until = time.monotonic() + STT_FLUSH_GRACE
             self.live_whisper = False
             self.live_preview = ""
             await self._send(self.engine, {"cmd": "live_stop"})
@@ -337,6 +341,8 @@ class Hub:
             chunk.source = source  # dual 번역 조각: 영어 원어를 보관 (조작자 참고용)
         if chunk and isinstance(eid, int):
             self._eids[eid] = chunk.id
+            while len(self._eids) > EID_KEEP:
+                self._eids.pop(next(iter(self._eids)))
         if chunk:
             # 앞 조각에 문장부호가 붙었고 이미 나간 조각이면 자막 화면도 갱신한다.
             await self.broadcast_live(display=prev_changed)
@@ -344,7 +350,7 @@ class Hub:
     def on_stt_audio(self, wav: bytes) -> None:
         """엔진(Whisper 방식): 말 한 토막. 받아쓰기는 run_stt_worker 가 순서대로 한다."""
         active = (self.live_on and self.live_whisper) or time.monotonic() < self._stt_accept_until
-        if not (active and wav[:4] == b"RIFF" and len(wav) <= 4 * 1024 * 1024):
+        if not (active and wav[:4] == b"RIFF" and len(wav) <= STT_WAV_MAX):
             return
         try:
             self._stt_queue.put_nowait((self._stt_gen, wav))
@@ -358,15 +364,19 @@ class Hub:
             if gen != self._stt_gen or self.groq is None:
                 continue
             full = self.config.get()
-            text = await self.groq.transcribe(wav, full["live"]["lang"], self._stt_prompt, full["groq"]["stt_model"])
+            try:
+                text = await self.groq.transcribe(wav, full["live"]["lang"], self._stt_prompt, full["groq"]["stt_model"])
+            except Exception as err:  # 응답 하나가 이상해도 받아쓰기 일꾼은 계속 돈다
+                print(f"[stt] 받아쓰기 오류: {type(err).__name__}: {err}", flush=True)
+                text = None
             if gen != self._stt_gen:
                 continue
             if text is None:
                 self.last_error = "Whisper 인식에 실패한 토막이 있습니다 (Groq 한도·네트워크). 빠진 말은 직접 입력으로 채워 주세요."
                 await self.broadcast_live(display=False)
             elif text:
-                # 직전 자막을 다음 토막의 힌트로 준다 (이어지는 말투·고유명사 표기, Whisper 프롬프트는 224토큰까지)
-                self._stt_prompt = f"{self._stt_prompt} {text}".strip()[-120:]
+                # 직전 자막을 다음 토막의 힌트로 준다 (이어지는 말투·고유명사 표기)
+                self._stt_prompt = f"{self._stt_prompt} {text}".strip()[-STT_PROMPT_CHARS:]
                 await self.on_draft(text, "pause", accept_stopped=True)
 
     async def on_revise(self, eid, text: str) -> None:
@@ -381,8 +391,10 @@ class Hub:
         cfg = self.config.get()["live"]
         chunk_id = data.get("id")
         changed_display = False
+        text = data.get("text")
+        text = text if isinstance(text, str) else None  # 조각 글은 문자열만 받는다
         if cmd == "send":
-            changed_display = self.live.send(chunk_id, data.get("text"))
+            changed_display = self.live.send(chunk_id, text)
             if data.get("break_after"):
                 self.live.toggle_break(chunk_id, True)
         elif cmd == "suggest":
@@ -411,11 +423,11 @@ class Hub:
         elif cmd == "send_all":
             changed_display = self.live.send_all_pending() > 0
         elif cmd == "send_upto":
-            changed_display = self.live.send_upto(chunk_id, data.get("text")) > 0
+            changed_display = self.live.send_upto(chunk_id, text) > 0
         elif cmd == "choose":
             # dual: 이 차례에서 고른 쪽을 내보낸다. id·text 가 오면 고친 내용을 먼저 반영한다.
-            if chunk_id is not None and isinstance(data.get("text"), str):
-                self.live.update_text(chunk_id, data["text"], cfg["countdown"])
+            if chunk_id is not None and text is not None:
+                self.live.update_text(chunk_id, text, cfg["countdown"])
             pair_id = data.get("pair_id")
             changed_display = isinstance(pair_id, int) and self.live.choose(pair_id, str(data.get("side", ""))) > 0
         elif cmd == "pause":
@@ -583,7 +595,7 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
                 continue
             kind = data.get("type")
             if kind == "final":
-                text = data.get("text", "").strip()
+                text = str(data.get("text", "")).strip()
                 if text and hub.accepts_final():
                     hub._finals.put_nowait(text)
             elif kind == "input_stopped":
