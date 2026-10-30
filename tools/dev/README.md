@@ -35,12 +35,12 @@ VK_GROQ_URL=http://127.0.0.1:8797/v1/chat/completions \
 
 | 파일 | 하는 일 |
 |---|---|
-| `mock_groq.py` | 가짜 Groq 서버(127.0.0.1:8797). 교정은 `[FIX] …`, 번역은 `[KO] …` 로 돌려주고 받은 지시문 첫 줄을 `PROMPT1` 로 찍는다 |
+| `mock_groq.py` | 가짜 Groq 서버(127.0.0.1:8797). 교정은 `[FIX] …`, 번역은 `[KO] …` 로 돌려주고 받은 지시문 첫 줄을 `PROMPT1` 로 찍는다. Whisper 받아쓰기(`/v1/audio/transcriptions`)는 받은 토막 길이를 `[STT n] 6.2초 ko` 로 돌려준다 (`VK_GROQ_STT_URL=http://127.0.0.1:8797/v1/audio/transcriptions`) |
 | `cdp_eval.py` | `cdp_eval.py <devtools 포트> <언어> <대기초> <js 파일>` — 열린 페이지에서 JS 를 실행하고 console 을 시간과 함께 출력 (userGesture 포함) |
 | `cdp_screenshot.py` | `cdp_screenshot.py <devtools 포트> <URL> <out.png> <폭> <높이> [js 파일]` — 페이지를 열고(선택: JS 주입) 캡처. `DARK=1` 이면 어두운 테마 |
 | `engine_watch.py` | `engine_watch.py <초> <out.tsv>` — 엔진 페이지에 붙어 `window.VK_DEBUG = true` 를 켜고 순차통역 진단 로그(세션 열림·원본 결과·소리 크기)를 모은다. 포트는 `VK_ENGINE_DEVTOOLS`(기본 9335) |
-| `interp_run.py` | `interp_run.py <유튜브 URL> <초> <out.json>` — 교정 화면 역할로 붙어 테스트 소리를 불러와 3:00 부터 순차통역 자막을 돌리고 조각·원어 줄을 저장 |
-| `dual_run.py` | `dual_run.py <유튜브 URL> <초> <out.json> [포트]` — 이중 STT(dual) 시험: 번역/통역 pair 수집, 번역 우선 시나리오로 조작자 선택 시뮬레이션 |
+| `interp_run.py` | `interp_run.py <유튜브 URL> <초> <out.json> [포트]` — 교정 화면 역할로 붙어 테스트 소리를 불러와 3:00 부터 순차통역 자막을 돌리고 조각·원어 줄을 저장 |
+| `dual_run.py` | `dual_run.py <유튜브 URL> <초> <out.json> [포트]` — 이중 STT(dual) 시험: 번역/통역 조각을 차례별로 모은다(조작자 선택 없음). `items` 는 통역 쪽이라 `score_live.py` 로 채점된다 |
 | `score_live.py` | `score_live.py <out.json> <자막.json3> <시작초> <끝초> [-v]` — 결과를 유튜브 자동 자막과 비교(한글 일치율) |
 | `live_client.py` | 현장 자막 자동/승인 흐름 시험(조각 크기·간격, 수정·버리기·나간 뒤 수정) |
 | `op_pace.js` | 교정 화면에 `cdp_eval.py` 로 주입 — 시작 → `Ctrl+Space` 멈춤(나간 수가 그대로인지) → 대기 3번째에서 `Ctrl+Enter`(+3 나가는지) → 다시 흐르기 확인 |

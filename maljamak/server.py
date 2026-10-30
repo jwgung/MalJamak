@@ -27,6 +27,10 @@ def _base(code: str) -> str:
     return str(code or "").split("-")[0].lower()
 
 
+STT_QUEUE_MAX = 20  # Whisper 토막이 밀릴 때 쌓아 두는 최대 개수 (토막당 최대 수백 KB)
+WS_MAX_MSG = 5 * 1024 * 1024  # WebSocket 한 메시지 최대 크기 (Whisper 토막 4MB + 여유)
+
+
 def pack_audio(pcm16: bytes, rate: int, channels: int) -> bytes:
     """엔진으로 보내는 소리 프레임: 샘플레이트(u32le) + 채널 수(u16le) + 0(u16) + s16le 인터리브 PCM.
     engine.html 의 pushAudio 와 짝이다."""
@@ -58,6 +62,13 @@ class Hub:
         self.live_preview = ""
         self.live_test = False  # 이번 현장 자막이 테스트 소리(유튜브)로 도는지
         self.live_other: list[str] = []  # 순차통역 모드: 강사 원어 인식 결과 (교정 화면 참고용)
+        self._eids: dict[int, int] = {}  # 엔진 조각 번호 → 조각 id ("인식이 바뀜"을 어느 조각에 달지)
+        # Whisper 엔진: 엔진이 보낸 말 토막(WAV)을 받은 순서대로 받아쓴다. 세대가 바뀌면(자막 다시 시작) 남은 토막은 버린다.
+        self._stt_queue: asyncio.Queue[tuple[int, bytes]] = asyncio.Queue(maxsize=STT_QUEUE_MAX)
+        self._stt_gen = 0
+        self._stt_prompt = ""
+        self._stt_accept_until = 0.0  # 멈춘 직후 엔진이 보내는 마지막 토막도 받는다
+        self.live_whisper = False
         self._bg: set[asyncio.Task] = set()  # 번역 제안처럼 화면을 막지 않고 도는 작업 (참조를 잡아 둬야 사라지지 않는다)
         self.test = TestSource(config_dir() / "test-audio", self._test_changed)
 
@@ -246,14 +257,24 @@ class Hub:
                 self.last_error = "엔진(Chrome)이 아직 준비되지 않았습니다."
                 await self._changed()
                 return
+            cfg = self.config.get()["live"]
+            whisper = cfg["engine"] == "whisper"
+            if whisper and (self.groq is None or cfg["mode"] != "normal"):
+                self.last_error = ("Whisper 인식을 쓰려면 설정에서 Groq API 키를 넣으세요." if self.groq is None
+                                   else "Whisper 인식은 일반 방식에서만 쓸 수 있습니다. 인식 방식을 온라인으로 바꾸세요.")
+                await self.broadcast_live(display=False)
+                return
             # 같은 엔진·마이크를 쓰므로 다른 인식은 끈다.
             await self.set_input(False)
             await self.set_captions(False)
-            cfg = self.config.get()["live"]
+            self.live_whisper = whisper
+            self._stt_gen += 1
+            self._stt_prompt = ""
             self.live.start()
             self.live_on = True
             self.live_test = test
             self.live_other = []
+            self._eids = {}
             self.live_preview = ""
             await self._send(self.engine, {
                 "cmd": "live_start", "lang": cfg["lang"], "mic": cfg["mic"], "local": cfg["engine"] == "local",
@@ -262,11 +283,14 @@ class Hub:
                 "offset": max(0.0, float(offset)),
                 "processing": cfg["voice_processing"],
                 "pause_ms": int(cfg["pause_seconds"] * 1000), "max_ms": int(cfg["max_wait_seconds"] * 1000),
-                "stable_ms": int(cfg["stable_seconds"] * 1000),
+                "stable_ms": int(cfg["stable_seconds"] * 1000), "chunk": cfg["chunk"], "whisper": whisper,
             })
         else:
             self.live_on = False
             self.live_test = False
+            if self.live_whisper:
+                self._stt_accept_until = time.monotonic() + 3
+            self.live_whisper = False
             self.live_preview = ""
             await self._send(self.engine, {"cmd": "live_stop"})
         await self._changed()
@@ -278,6 +302,7 @@ class Hub:
     def _live_status(self) -> dict:
         cfg = self.config.get()["live"]
         return {"live": self.live_on, "live_test": self.live_test, "test": self.test.view(), "mode": cfg["mode"],
+                "recognizer": cfg["engine"],
                 "test_audio": f"/live/test-audio?f={self.test.path.name}" if self.test.path else None,
                 "engine": self.engine is not None, "review": cfg["review"], "paused": self.live.paused,
                 "countdown": cfg["countdown"], "transcript": str(self.live.transcript_path()) if self.live.started else "",
@@ -298,8 +323,9 @@ class Hub:
                 await self._send(ws, payload)
 
     async def on_draft(self, text: str, reason: str = "", side: str = "", pair_id: int | None = None,
-                       source: str = "") -> None:
-        if not self.live_on:
+                       source: str = "", eid: int | None = None, accept_stopped: bool = False) -> None:
+        # accept_stopped: Whisper 는 멈춘 뒤에 받아쓰기가 끝나는 토막이 있어 그 세션 기록에 이어 붙인다
+        if not self.live_on and not (accept_stopped and self.live.started):
             return
         cfg = self.config.get()["live"]
         # 자동 줄바꿈 추측은 한국어 어미·접속어 규칙이라 자막 언어가 한국어일 때만 쓴다 (다른 언어는 Shift+Enter)
@@ -309,9 +335,46 @@ class Hub:
                                                   side=side, pair_id=pair_id)
         if chunk and source:
             chunk.source = source  # dual 번역 조각: 영어 원어를 보관 (조작자 참고용)
+        if chunk and isinstance(eid, int):
+            self._eids[eid] = chunk.id
         if chunk:
             # 앞 조각에 문장부호가 붙었고 이미 나간 조각이면 자막 화면도 갱신한다.
             await self.broadcast_live(display=prev_changed)
+
+    def on_stt_audio(self, wav: bytes) -> None:
+        """엔진(Whisper 방식): 말 한 토막. 받아쓰기는 run_stt_worker 가 순서대로 한다."""
+        active = (self.live_on and self.live_whisper) or time.monotonic() < self._stt_accept_until
+        if not (active and wav[:4] == b"RIFF" and len(wav) <= 4 * 1024 * 1024):
+            return
+        try:
+            self._stt_queue.put_nowait((self._stt_gen, wav))
+        except asyncio.QueueFull:
+            print("[stt] 받아쓰기가 밀려 토막 하나를 버림", flush=True)
+            self.last_error = "Whisper 받아쓰기가 밀려 말 일부를 놓쳤습니다 (Groq 응답이 느림). 빠진 말은 직접 입력으로 채워 주세요."
+
+    async def run_stt_worker(self) -> None:
+        while True:
+            gen, wav = await self._stt_queue.get()
+            if gen != self._stt_gen or self.groq is None:
+                continue
+            full = self.config.get()
+            text = await self.groq.transcribe(wav, full["live"]["lang"], self._stt_prompt, full["groq"]["stt_model"])
+            if gen != self._stt_gen:
+                continue
+            if text is None:
+                self.last_error = "Whisper 인식에 실패한 토막이 있습니다 (Groq 한도·네트워크). 빠진 말은 직접 입력으로 채워 주세요."
+                await self.broadcast_live(display=False)
+            elif text:
+                # 직전 자막을 다음 토막의 힌트로 준다 (이어지는 말투·고유명사 표기, Whisper 프롬프트는 224토큰까지)
+                self._stt_prompt = f"{self._stt_prompt} {text}".strip()[-120:]
+                await self.on_draft(text, "pause", accept_stopped=True)
+
+    async def on_revise(self, eid, text: str) -> None:
+        """엔진: 이미 내보낸 조각의 말을 Chrome 이 고쳐 확정했다."""
+        chunk_id = self._eids.get(eid) if isinstance(eid, int) else None
+        if self.live_on and chunk_id is not None:
+            self.live.revise(chunk_id, str(text))
+            await self.broadcast_live(display=False)
 
     async def on_operator(self, data: dict) -> None:
         cmd = data.get("cmd")
@@ -339,14 +402,22 @@ class Hub:
         elif cmd == "update":
             chunk = self.live.find(chunk_id)
             was_sent = chunk is not None and chunk.status == "sent"
-            self.live.update_text(chunk_id, data.get("text", ""), cfg["countdown"])
+            self.live.update_text(chunk_id, str(data.get("text", "")), cfg["countdown"])
             changed_display = was_sent
+        elif cmd == "dismiss_revision":
+            self.live.dismiss_revision(chunk_id)
         elif cmd == "editing":
             self.live.set_editing(chunk_id, bool(data.get("on")), cfg["countdown"])
         elif cmd == "send_all":
             changed_display = self.live.send_all_pending() > 0
         elif cmd == "send_upto":
             changed_display = self.live.send_upto(chunk_id, data.get("text")) > 0
+        elif cmd == "choose":
+            # dual: 이 차례에서 고른 쪽을 내보낸다. id·text 가 오면 고친 내용을 먼저 반영한다.
+            if chunk_id is not None and isinstance(data.get("text"), str):
+                self.live.update_text(chunk_id, data["text"], cfg["countdown"])
+            pair_id = data.get("pair_id")
+            changed_display = isinstance(pair_id, int) and self.live.choose(pair_id, str(data.get("side", ""))) > 0
         elif cmd == "pause":
             self.live.set_paused(bool(data.get("on")), cfg["countdown"])
         elif cmd == "start":
@@ -472,7 +543,7 @@ async def origin_guard(request: web.Request, handler):
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     hub: Hub = request.app["hub"]
     role = request.query.get("role", "")
-    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=0)
+    ws = web.WebSocketResponse(heartbeat=20, max_msg_size=WS_MAX_MSG)
     await ws.prepare(request)
 
     if role == "engine":
@@ -501,6 +572,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     pending: set[asyncio.Task] = set()
     try:
         async for msg in ws:
+            if msg.type == WSMsgType.BINARY and role == "engine":
+                hub.on_stt_audio(msg.data)  # Whisper 방식: 말 한 토막(WAV)
+                continue
             if msg.type != WSMsgType.TEXT or role not in ("engine", "operator"):
                 continue
             data = msg.json()
@@ -520,7 +594,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
             elif kind == "draft":
                 await hub.on_draft(data.get("text", ""), data.get("reason", ""),
                                    side=data.get("side", ""), pair_id=data.get("pair_id"),
-                                   source=data.get("source", ""))
+                                   source=data.get("source", ""), eid=data.get("eid"))
+            elif kind == "revise":
+                await hub.on_revise(data.get("eid"), data.get("text", ""))
             elif kind == "live_other":
                 hub.live_other.append(data.get("text", ""))
                 hub.live_other = hub.live_other[-200:]
@@ -678,10 +754,12 @@ def build_app(hub: Hub, port: int, on_settings: Callable[[dict], None],
         hub.loop = asyncio.get_running_loop()
         _app["paste_worker"] = asyncio.create_task(hub.run_paste_worker())
         _app["live_ticker"] = asyncio.create_task(hub.run_live_ticker())
+        _app["stt_worker"] = asyncio.create_task(hub.run_stt_worker())
 
     async def on_cleanup(_app: web.Application) -> None:
         _app["paste_worker"].cancel()
         _app["live_ticker"].cancel()
+        _app["stt_worker"].cancel()
         if hub.groq:
             await hub.groq.close()
 

@@ -35,6 +35,9 @@
   .pane h2 { font-size: 16px; }
   .pane > .lead { margin: 4px 0 20px; color: var(--text-3); font-size: 13px; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 20px; }
+  .hotkeyrow { display: flex; gap: 8px; }
+  .hotkeyrow input { flex: 1; min-width: 0; }
+  .hotkeyrow .btn { white-space: nowrap; }
   .grid .full { grid-column: 1 / -1; }
   .stack { display: flex; flex-direction: column; gap: 18px; }
   .sub { margin: 22px 0 12px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; font-weight: 700; color: var(--text-2); }
@@ -102,8 +105,9 @@
         <p class="lead">말한 내용을 지금 포커스된 입력창에 붙여넣습니다.</p>
         <div class="grid">
           <label class="field"><span>단축키</span>
-            <input type="text" name="input.hotkey" placeholder="<ctrl>+<alt>+<space>">
-            <small>예: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code></small></label>
+            <span class="hotkeyrow"><input type="text" name="input.hotkey" placeholder="<ctrl>+<alt>+<space>">
+              <button type="button" class="btn" id="btnRecordKey">키 눌러 지정</button></span>
+            <small id="hotkeyHint">버튼을 누르고 쓰고 싶은 키 조합을 누르세요. 직접 쓸 수도 있습니다: <code>&lt;ctrl&gt;+&lt;alt&gt;+&lt;space&gt;</code>, <code>&lt;f9&gt;</code></small></label>
           <label class="field"><span>방식</span>
             <select name="input.mode">
               <option value="toggle">누를 때마다 시작/정지</option>
@@ -353,6 +357,68 @@ $("#btnTranslator").onclick = async () => {
   $("#error").textContent = "작은 Chrome 창이 뜨면 '받기'를 눌러 주세요. 끝나면 창이 저절로 닫힙니다.";
 };
 $("#btnCaptions").onclick = () => fetch("/captions/toggle", { method: "POST" });
+
+// ── 단축키 눌러서 지정 ──
+// ── 단축키 변환 시작
+// 브라우저 키 이벤트를 pynput 단축키 형식(<ctrl>+<alt>+<space>)으로 바꾼다. 자판 배열·한글 입력 상태와 무관하게 e.code 를 쓴다.
+// 돌려주는 값: { combo } 또는 { error } 또는 null(아직 수식키만 누름)
+const HOTKEY_NAMED = {
+  Space: "space", Enter: "enter", Tab: "tab", Backspace: "backspace", Delete: "delete", Insert: "insert",
+  Home: "home", End: "end", PageUp: "page_up", PageDown: "page_down", Pause: "pause", ScrollLock: "scroll_lock",
+  PrintScreen: "print_screen", ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right", CapsLock: "caps_lock",
+};
+const HOTKEY_CHARS = { Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";",
+                       Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`" };
+const HOTKEY_MODIFIERS = new Set(["ControlLeft", "ControlRight", "AltLeft", "AltRight", "ShiftLeft", "ShiftRight", "MetaLeft", "MetaRight"]);
+function comboFromEvent(e) {
+  if (HOTKEY_MODIFIERS.has(e.code)) return null;
+  let key = null, needsModifier = true;
+  if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3).toLowerCase();
+  else if (/^Digit[0-9]$/.test(e.code)) key = e.code.slice(5);
+  else if (/^F([1-9]|1[0-9]|20)$/.test(e.code)) { key = `<${e.code.toLowerCase()}>`; needsModifier = false; }
+  else if (HOTKEY_NAMED[e.code]) {
+    key = `<${HOTKEY_NAMED[e.code]}>`;
+    needsModifier = !["Pause", "ScrollLock", "PrintScreen", "Insert"].includes(e.code);
+  } else if (HOTKEY_CHARS[e.code]) key = HOTKEY_CHARS[e.code];
+  if (!key) return { error: "이 키는 단축키로 쓸 수 없습니다 (한/영·한자 키 등). 다른 키를 눌러 주세요." };
+  const mods = [e.ctrlKey && "<ctrl>", e.altKey && "<alt>", e.shiftKey && "<shift>", e.metaKey && "<cmd>"].filter(Boolean);
+  if (needsModifier && !mods.length) return { error: "글자·숫자·스페이스는 Ctrl·Alt 같은 키와 함께 눌러 주세요 (혼자 쓰면 글을 쓸 때 걸립니다)." };
+  return { combo: [...mods, key].join("+") };
+}
+// ── 단축키 변환 끝
+{
+  const btn = $("#btnRecordKey"), field = $('[name="input.hotkey"]'), hint = $("#hotkeyHint");
+  const defaultHint = hint.innerHTML;
+  let recording = false;
+  const stop = () => {
+    recording = false;
+    btn.textContent = "키 눌러 지정";
+    btn.classList.remove("primary");
+    document.removeEventListener("keydown", onKey, true);
+    hint.innerHTML = defaultHint;  // 처음부터 페이지에 있던 안내문으로 되돌린다
+  };
+  const onKey = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.code === "Escape" && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) { stop(); return; }
+    const result = comboFromEvent(e);
+    if (!result) return;  // 수식키만 눌렀다: 나머지 키를 기다린다
+    if (result.error) { hint.textContent = result.error; return; }
+    field.value = result.combo;
+    field.dispatchEvent(new Event("input", { bubbles: true }));  // 저장 막대
+    stop();
+    const code = document.createElement("code");
+    code.textContent = result.combo;
+    hint.replaceChildren(code, " 로 지정했습니다. 저장을 눌러야 적용됩니다.");
+  };
+  btn.onclick = () => {
+    if (recording) { stop(); return; }
+    recording = true;
+    btn.textContent = "키를 누르세요… (Esc 취소)";
+    btn.classList.add("primary");
+    hint.textContent = "쓰고 싶은 키 조합을 한 번에 누르세요. 지금 단축키와 같은 조합을 누르면 음성 입력이 켜질 수 있습니다.";
+    document.addEventListener("keydown", onKey, true);
+  };
+}
 
 let engineReady = false;
 function watch() {

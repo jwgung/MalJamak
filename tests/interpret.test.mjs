@@ -47,4 +47,17 @@ check("영어 통역: 대소문자만 다른 중복은 버림",
   ["God's grace is the same for everyone", ""]);
 check("일본어 통역: 한자·가나는 남기고 영어는 뺌",
   runLang("ja-JP", ["今日は ローマ書 8章を 見ます hello"]), ["今日は ローマ書 8章を 見ます"]);
+
+// 이중 STT 짝짓기: 강사 말 → 통역이 한 차례, 통역 뒤 강사 말이 오면 새 차례
+const dualBody = html.slice(html.indexOf("// ── 이중 STT 짝짓기 시작"), html.indexOf("// ── 이중 STT 짝짓기 끝"));
+const dualFile = join(mkdtempSync(join(tmpdir(), "dual-")), "dual.mjs");
+writeFileSync(dualFile, dualBody + "\nexport { dualTurn };\n");
+const { dualTurn } = await import(pathToFileURL(dualFile).href);
+{
+  const D = { turn: 1, lastSide: "" };
+  const sides = ["translate", "translate", "interpret", "interpret", "translate", "interpret", "interpret", "translate"];
+  check("이중 STT: 바통 넘김마다 차례", sides.map((s) => dualTurn(D, s)), [1, 1, 1, 1, 2, 2, 2, 3]);
+  const K = { turn: 1, lastSide: "" };
+  check("이중 STT: 통역부터 시작해도 첫 차례", ["interpret", "translate", "interpret"].map((s) => dualTurn(K, s)), [1, 2, 2]);
+}
 process.exit(fail ? 1 : 0);

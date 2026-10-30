@@ -101,6 +101,40 @@ class FillGapsTest(unittest.TestCase):
         self.assertEqual(s.text, "조작자가 쓴 통역")
 
 
+class RevisionTest(unittest.TestCase):
+    """Chrome 이 이미 내보낸 말을 나중에 고쳐 확정했을 때."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.live = LiveSession(Path(self.tmp.name))
+        self.live.start()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pending_untouched_chunk_takes_revision(self):
+        a, _ = self.live.add_draft("로마서 활성화 말씀을", "manual", 3)
+        self.live.revise(a.id, "로마서 8장 말씀을")
+        self.assertEqual((a.text, a.revision), ("로마서 8장 말씀을", ""))
+
+    def test_sent_chunk_keeps_text_and_shows_revision(self):
+        a, _ = self.live.add_draft("로마서 활성화 말씀을", "manual", 3)
+        self.live.send(a.id)
+        self.live.revise(a.id, "로마서 8장 말씀을")
+        self.assertEqual((a.text, a.revision), ("로마서 활성화 말씀을", "로마서 8장 말씀을"))
+        self.live.send(a.id, a.revision)  # 조작자가 반영
+        self.assertEqual((a.text, a.revision), ("로마서 8장 말씀을", ""))
+        self.assertEqual(self.live.display_view()[0]["text"], "로마서 8장 말씀을")
+
+    def test_operator_edit_is_not_overwritten(self):
+        a, _ = self.live.add_draft("로마서 활성화", "manual", 3)
+        self.live.update_text(a.id, "로마서 8장 (조작자)", 3)
+        self.live.revise(a.id, "로마서 8장")
+        self.assertEqual((a.text, a.revision), ("로마서 8장 (조작자)", "로마서 8장"))
+        self.live.dismiss_revision(a.id)
+        self.assertEqual(a.revision, "")
+
+
 class OperatorPaceTest(unittest.TestCase):
     """조작자가 속도를 따라가게 돕는 기능: 전체 일시정지, 여기까지 내보내기."""
 
@@ -205,6 +239,52 @@ class DualSttTest(unittest.TestCase):
         self.assertEqual(b.status, "sent")
         # 자막 화면에는 고른 쪽(통역)만
         self.assertEqual([c["text"] for c in self.live.display_view()], ["통역"])
+
+    def test_unchosen_pair_never_auto_sent(self):
+        a, _ = self.live.add_draft("번역", "auto", 0, side="translate", pair_id=1)
+        b, _ = self.live.add_draft("통역", "auto", 0, side="interpret", pair_id=1)
+        self.assertIsNone(a.deadline)
+        self.assertEqual(self.live.due(), [])  # 자동 내보내기여도 고르기 전에는 나가지 않는다
+        self.live.set_review("auto", 0)
+        self.assertIsNone(b.deadline)
+
+    def test_choose_sends_side_and_drops_later_other_side(self):
+        t1, _ = self.live.add_draft("번역 하나", "auto", 3, side="translate", pair_id=1)
+        i1, _ = self.live.add_draft("통역 하나", "auto", 3, side="interpret", pair_id=1)
+        self.assertEqual(self.live.choose(1, "interpret"), 1)
+        self.assertEqual((t1.status, i1.status), ("discarded", "sent"))
+        # 같은 차례에 늦게 온 조각: 고른 쪽은 검토 방식대로, 다른 쪽은 버린다
+        i2, _ = self.live.add_draft("통역 둘", "auto", 3, side="interpret", pair_id=1)
+        t2, _ = self.live.add_draft("번역 둘", "auto", 3, side="translate", pair_id=1)
+        self.assertEqual(i2.status, "pending")
+        self.assertIsNotNone(i2.deadline)
+        self.assertEqual(t2.status, "discarded")
+        # 다음 차례는 다시 골라야 한다
+        t3, _ = self.live.add_draft("번역 셋", "auto", 3, side="translate", pair_id=2)
+        self.assertIsNone(t3.deadline)
+
+    def test_send_on_dual_row_chooses_that_side(self):
+        t, _ = self.live.add_draft("번역", "manual", 3, side="translate", pair_id=1)
+        i, _ = self.live.add_draft("통역", "manual", 3, side="interpret", pair_id=1)
+        self.assertTrue(self.live.send(i.id, "통역 (고침)"))
+        self.assertEqual((t.status, i.status, i.text), ("discarded", "sent", "통역 (고침)"))
+
+    def test_send_all_defaults_to_translate(self):
+        t1, _ = self.live.add_draft("번역 하나", "manual", 3, side="translate", pair_id=1)
+        i1, _ = self.live.add_draft("통역 하나", "manual", 3, side="interpret", pair_id=1)
+        i2, _ = self.live.add_draft("통역만 있는 차례", "manual", 3, side="interpret", pair_id=2)
+        self.assertEqual(self.live.send_all_pending(), 2)
+        self.assertEqual([c["text"] for c in self.live.display_view()], ["번역 하나", "통역만 있는 차례"])
+        self.assertEqual(i1.status, "discarded")
+
+    def test_send_upto_in_dual(self):
+        t1, _ = self.live.add_draft("번역 하나", "manual", 3, side="translate", pair_id=1)
+        i1, _ = self.live.add_draft("통역 하나", "manual", 3, side="interpret", pair_id=1)
+        t2, _ = self.live.add_draft("번역 둘", "manual", 3, side="translate", pair_id=2)
+        i2, _ = self.live.add_draft("통역 둘", "manual", 3, side="interpret", pair_id=2)
+        self.assertEqual(self.live.send_upto(i2.id), 2)  # 차례 1 은 번역(기본), 차례 2 는 고른 통역
+        self.assertEqual([c["text"] for c in self.live.display_view()], ["번역 하나", "통역 둘"])
+        self.assertEqual(t2.status, "discarded")
 
 
 if __name__ == "__main__":

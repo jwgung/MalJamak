@@ -76,6 +76,8 @@ class Chunk:
     # pair_id: 같은 문장의 두 버전(번역·통역)을 짝짓는다
     side: str = ""
     pair_id: int | None = None
+    # Chrome 이 이 조각의 말을 나중에 고쳐 확정한 글. 이미 나갔거나 조작자가 고친 조각에만 남기고, 조작자가 반영하거나 무시한다.
+    revision: str = ""
 
 
 @dataclass
@@ -86,9 +88,12 @@ class LiveSession:
     _file: Path | None = None
     started: datetime | None = None
     paused: bool = False  # 전체 일시정지: 자동 내보내기 카운트다운을 모두 멈춘다 (조작자가 틀린 것을 고치는 동안)
+    # dual 모드: 차례(pair_id)마다 조작자가 고른 쪽 ("translate" | "interpret"). 고르기 전에는 아무것도 저절로 나가지 않는다.
+    pair_choice: dict[int, str] = field(default_factory=dict)
 
     def start(self) -> None:
         self.paused = False
+        self.pair_choice.clear()
         self.items.clear()
         self.started = datetime.now()
         self._file = None
@@ -108,6 +113,13 @@ class LiveSession:
         chunk = Chunk(id=self._seq, text=text, created=now, reason=reason,
                       deadline=now + countdown if review == "auto" else None,
                       side=side, pair_id=pair_id)
+        if pair_id is not None and side:
+            # dual: 아직 고르지 않은 차례는 조작자가 골라야 나간다. 이미 고른 차례면 고른 쪽만 받고 다른 쪽은 버린다.
+            choice = self.pair_choice.get(pair_id)
+            if choice is None:
+                chunk.deadline = None
+            elif choice != side:
+                chunk.status, chunk.deadline = "discarded", None
         prev_changed = False
         prev = next((c for c in reversed(self.items) if c.status != "discarded"), None)
         if prev is not None and auto_break:
@@ -152,6 +164,25 @@ class LiveSession:
         self._insert(chunk, after_id=after_id)
         return chunk
 
+    def revise(self, chunk_id: int, text: str) -> None:
+        """Chrome 이 이미 내보낸 조각의 말을 고쳐 확정했다. 아직 대기 중이고 조작자가 손대지 않았으면 그대로 바꾸고,
+        나갔거나 조작자가 고친 조각이면 "인식이 바뀜"으로만 남긴다 (자막 화면은 조작자가 반영할 때 바뀐다)."""
+        chunk = self.find(chunk_id)
+        text = " ".join(text.split())
+        if chunk is None or chunk.status == "discarded" or not text or text == chunk.text:
+            return
+        if chunk.status == "pending" and not chunk.edited and not chunk.editing:
+            chunk.text, chunk.revision = text, ""
+        else:
+            chunk.revision = text
+
+    def dismiss_revision(self, chunk_id: int) -> bool:
+        chunk = self.find(chunk_id)
+        if chunk is None:
+            return False
+        chunk.revision = ""
+        return True
+
     def find(self, chunk_id: int) -> Chunk | None:
         return next((c for c in self.items if c.id == chunk_id), None)
 
@@ -168,6 +199,11 @@ class LiveSession:
                 return self.discard(chunk_id)
             if text != chunk.text:
                 chunk.text, chunk.edited = text, True
+            if text == chunk.revision:
+                chunk.revision = ""
+        if chunk.status == "pending" and self._unchosen(chunk):
+            # dual: 한 줄을 내보내면 그 차례는 그 쪽으로 고른 것이다 (다른 쪽은 버린다)
+            return self.choose(chunk.pair_id, chunk.side) > 0
         chunk.editing = False
         if chunk.status != "sent":
             chunk.status, chunk.sent_at = "sent", time.time()
@@ -204,6 +240,8 @@ class LiveSession:
             chunk.text, chunk.edited = text, True
             if chunk.status == "sent":
                 self._write()
+        if text and text == chunk.revision:
+            chunk.revision = ""
         chunk.editing = False
         if chunk.status == "pending" and chunk.deadline is not None:
             chunk.deadline = time.time() + countdown
@@ -222,8 +260,40 @@ class LiveSession:
     def set_review(self, review: str, countdown: float) -> None:
         now = time.time()
         for c in self.items:
-            if c.status == "pending" and c.kind != "suggest":  # 번역 제안은 늘 조작자가 확인
+            # 번역 제안과 아직 고르지 않은 dual 차례는 늘 조작자가 확인
+            if c.status == "pending" and c.kind != "suggest" and not self._unchosen(c):
                 c.deadline = now + countdown if review == "auto" else None
+
+    # ───────── dual 모드: 차례마다 한쪽 고르기 ─────────
+
+    def _unchosen(self, c: Chunk) -> bool:
+        return c.pair_id is not None and bool(c.side) and c.pair_id not in self.pair_choice
+
+    def choose(self, pair_id: int, side: str) -> int:
+        """이 차례(pair_id)에서 고른 쪽의 대기 조각을 내보내고 다른 쪽은 버린다. 나중에 오는 다른 쪽 조각도 버린다.
+        내보낸 개수를 돌려준다."""
+        if side not in ("translate", "interpret"):
+            return 0
+        # send() 는 고르지 않은 차례의 조각이면 choose() 를 부르므로, 내보내기 전에 먼저 고른 것으로 적어야 한다
+        self.pair_choice[pair_id] = side
+        count = 0
+        for c in self.items:
+            if c.pair_id != pair_id or c.status != "pending" or not c.side:
+                continue
+            if c.side == side:
+                count += self.send(c.id)
+            else:
+                self.discard(c.id)
+        return count
+
+    def _choose_default(self, upto: int | None = None) -> int:
+        """여기까지·모두 내보내기에서 아직 고르지 않은 차례는 번역 쪽(없으면 통역)으로 고른다. 내보낸 개수를 돌려준다."""
+        pending = [c for c in self.items[:upto] if c.status == "pending" and self._unchosen(c)]
+        count = 0
+        for pair_id in dict.fromkeys(c.pair_id for c in pending):
+            sides = {c.side for c in self.items if c.pair_id == pair_id and c.status == "pending"}
+            count += self.choose(pair_id, "translate" if "translate" in sides else "interpret")
+        return count
 
     def set_paused(self, paused: bool, countdown: float) -> None:
         """멈추면 아무것도 저절로 나가지 않는다. 다시 흐르게 하면 대기 조각들이 카운트다운을 새로 시작한다
@@ -251,20 +321,26 @@ class LiveSession:
         if index is None:
             return 0
         count = 0
+        target = self.items[index]
+        if self._unchosen(target):  # dual: 조작자가 고른 그 줄의 쪽으로 이 차례를 고른다
+            if text is not None:
+                self.update_text(target.id, text, 0)
+            count += self.choose(target.pair_id, target.side)
+        count += self._choose_default(index)
         for c in self.items[:index]:
             if c.status == "pending" and c.kind != "suggest" and self.send(c.id):
                 count += 1
-        target = self.items[index]
         if target.status == "pending" and self.send(target.id, text):
             count += 1
         return count
 
     def send_all_pending(self) -> int:
+        chosen = self._choose_default()  # dual: 고르지 않은 차례는 번역 쪽으로
         # 번역 제안은 조작자가 하나씩 확인해야 하므로 "모두 내보내기"에서 뺀다
         pending = [c for c in self.items if c.status == "pending" and c.kind != "suggest"]
         for c in pending:
             self.send(c.id)
-        return len(pending)
+        return chosen + len(pending)
 
     # ───────── 화면용 데이터 ─────────
 

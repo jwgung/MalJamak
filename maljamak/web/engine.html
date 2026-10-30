@@ -271,6 +271,9 @@ const MIN_CHUNK_WORDS = 3;
 const MIN_GAP_MS = 1000;  // 어미 기준으로 너무 잘게 쪼개지지 않게
 // 의미 단위가 끝나는 어미·문장부호. 이 단어 뒤에서 자르면 자연스럽다.
 const BOUNDARY = /(니다|어요|아요|에요|예요|세요|해요|죠|다|요|까|고|며|서|는데|은데|인데|지만|니까|면|거든|[.,!?。！？])$/;
+// 조각 크기 "문장 단위": 문장이 끝나는 어미·부호에서만 자른다. 자를 곳을 기다리는 시간도 길게 준다.
+const SENTENCE_BOUNDARY = /(니다|어요|아요|에요|예요|세요|해요|죠|다|요|까|[.!?。！？])$/;
+const SENTENCE_MAX_MS = 8000;
 let live = null;
 let liveGen = 0;
 
@@ -279,7 +282,9 @@ let liveGen = 0;
 function resetLiveSession(L) {
   L.words = []; L.since = []; L.finalCount = 0; L.emitted = 0; L.preview = "";
   L.emittedChars = 0; L.partial = 0;  // partial: words[emitted] 중 이미 내보낸 앞 글자 수
+  L.log = [];  // 이번 세션에서 내보낸 조각: { eid, from, to, text } (글자 위치는 공백 뺀 기준)
 }
+let liveEid = 0;  // 엔진이 붙이는 조각 번호. 서버가 자기 조각 id 와 짝지어 "인식이 바뀜"을 그 조각에 단다.
 
 function realignLive(L) {
   let acc = 0, k = 0;
@@ -300,10 +305,60 @@ function emitLive(L, upto, reason = "max") {
   const parts = pendingWords(L, upto);
   L.emitted = upto;
   L.partial = 0;
+  const from = L.emittedChars;
   L.emittedChars += parts.join("").length;
   if (!parts.length) return;
   L.lastEmit = performance.now();
-  send({ type: "draft", text: parts.join(" "), reason });
+  const eid = ++liveEid;
+  L.log.push({ eid, from, to: L.emittedChars, text: parts.join("") });
+  if (L.log.length > REVISION_KEEP) L.log.shift();
+  send({ type: "draft", text: parts.join(" "), reason, eid });
+}
+
+// 이미 내보낸 말을 Chrome 이 나중에 고쳐 확정하면("로마서 활성화" → "로마서 8장") 그 조각에 "인식이 바뀜"을 알린다.
+// 내보낸 글과 지금 결과를 공통 구간으로 맞춰 조각 경계를 옮기고, 그 구간이 모두 확정됐을 때만 알린다(중간 결과로 흔들리지 않게).
+// 바뀐 만큼 내보낸 글자 수도 옮겨, 뒤 조각이 겹치거나 빠지지 않게 한다.
+function wordsSlice(words, from, to) {
+  const out = [];
+  let acc = 0;
+  for (const w of words) {
+    const a = Math.max(from, acc), b = Math.min(to, acc + w.length);
+    if (a < b) out.push(w.slice(a - acc, b - acc));
+    acc += w.length;
+  }
+  return out.join(" ");
+}
+
+const REVISION_KEEP = 8;  // 최근 조각 몇 개만 본다 (공통 구간 찾기는 글자 수의 제곱만큼 걸린다)
+
+function checkRevisions(L) {
+  if (!L.log.length) return;
+  // 지켜보는 첫 조각 앞의 글은 그대로라고 보고, 그 뒤만 맞춘다
+  const base = L.log[0].from;
+  const E = L.log.map((c) => c.text).join(""), N = L.words.join("").slice(base);
+  if (N.startsWith(E)) return;
+  const blocks = matchingBlocks(E, N);
+  if (!blocks.length) return;
+  // 내보낸 글의 위치 → 지금 결과의 위치
+  const map = (pos) => {
+    let out = 0;
+    for (const [i, j, k] of blocks) {
+      if (pos >= i && pos <= i + k) return j + (pos - i);
+      if (i + k <= pos) out = j + k + (pos - i - k);
+    }
+    return Math.min(out, N.length);
+  };
+  const end = map(E.length);
+  if (base + end > L.words.slice(0, L.finalCount).join("").length) return;  // 아직 확정 전
+  let offset = 0;
+  for (const c of L.log) {
+    const from = map(offset), to = map(offset + c.text.length);
+    offset += c.text.length;
+    const text = N.slice(from, to);
+    if (text && text !== c.text) send({ type: "revise", eid: c.eid, text: wordsSlice(L.words, base + from, base + to) });
+    Object.assign(c, { from: base + from, to: base + to, text });
+  }
+  L.emittedChars = base + end;
 }
 
 function sendLivePreview(L) {
@@ -325,6 +380,7 @@ function onLiveResult(L, e) {
   L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
   L.words = words;
   L.finalCount = finals.length;
+  checkRevisions(L);
   realignLive(L);
   if (changed) L.lastChange = now;
   evaluateLive(L);
@@ -334,7 +390,8 @@ function onLiveResult(L, e) {
 // 어미 규칙은 한국어 전용이다. 다른 언어는 문장 확정·말 멈춤·최대 대기로만 자른다 (줄바꿈은 조작자가 Shift+Enter).
 function lastBoundary(L, stable) {
   if (L.korean === false) return -1;
-  for (let j = stable; j >= L.emitted + MIN_CHUNK_WORDS; j--) if (BOUNDARY.test(L.words[j - 1])) return j;
+  const re = L.sentence ? SENTENCE_BOUNDARY : BOUNDARY;
+  for (let j = stable; j >= L.emitted + MIN_CHUNK_WORDS; j--) if (re.test(L.words[j - 1])) return j;
   return -1;
 }
 
@@ -378,10 +435,14 @@ async function startLive(msg) {
   if (gen !== liveGen) { stream.getTracks().forEach((t) => t.stop()); testAudio?.pause(); return; }
   if (msg.mode === "interpret") { await startInterpret(msg, stream, testAudio); return; }
   if (msg.mode === "dual") { await startDual(msg, stream, testAudio); return; }
+  if (msg.whisper) { startWhisper(msg, stream, testAudio); return; }
   const track = stream.getAudioTracks()[0];
   const r = newRecognition(msg.lang);
   if (msg.local) r.processLocally = true;
-  const L = { rec: r, stream, testAudio, korean: String(msg.lang || "").startsWith("ko"), maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
+  const sentence = msg.chunk === "sentence";
+  const maxMs = msg.max_ms || 3000;
+  const L = { rec: r, stream, testAudio, korean: String(msg.lang || "").startsWith("ko"), sentence,
+              maxMs: sentence ? Math.max(maxMs, SENTENCE_MAX_MS) : maxMs, pauseMs: msg.pause_ms || 600, stableMs: msg.stable_ms || 800,
               lastEmit: performance.now(), lastChange: performance.now() };
   resetLiveSession(L);
   live = L;
@@ -420,10 +481,12 @@ async function openTestAudio(url, offset) {
   return [stream, el];
 }
 
-function stopLive() {
+// flush: 조작자가 자막을 멈췄을 때 Whisper 방식의 마지막 토막까지 보낸다 (말이 통째로 빠지지 않게)
+function stopLive(flush = false) {
   liveGen++;
   stopInterpret();
   stopDual();
+  stopWhisper(flush);
   const L = live;
   if (!L) return;
   live = null;
@@ -464,6 +527,7 @@ function makeForeign(lang) {
 }
 const normKo = makeNorm("ko");
 
+// ── 공통 구간 시작
 // 두 문자열의 공통 구간 목록 (difflib.get_matching_blocks 와 같은 방식, 짧은 문자열용)
 function matchingBlocks(a, b) {
   const out = [];
@@ -490,6 +554,8 @@ function matchingBlocks(a, b) {
   }
   return out.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
 }
+
+// ── 공통 구간 끝
 
 // 단어 목록에서 앞쪽 n 글자(공백·기호 제외)에 해당하는 단어 수. exact 면 정확히 n 에서 끝날 때만.
 function wordsCovering(words, n, exact, norm = normKo) {
@@ -544,7 +610,13 @@ class InterpretMerger {
 
 let interp = null;
 
-async function startInterpret(msg, stream, testAudio) {
+// sink: 결과를 어디로 보낼지. 기본은 순차통역(통역 → 조각, 원어 → 참고 줄). 이중 STT 는 둘 다 조각으로 보낸다.
+const INTERPRET_SINK = {
+  target: (text) => send({ type: "draft", text, reason: "final" }),
+  other: (text) => send({ type: "live_other", text }),
+};
+
+async function startInterpret(msg, stream, testAudio, sink = INTERPRET_SINK) {
   const target = msg.lang || "ko-KR", other = msg.other_lang || "en-US";
   // 일반 모드의 조각 나누기 값(pause_ms=0.7초)과 섞이지 않게 순차통역 전용 값을 쓴다.
   // 강사↔통역사 바통 넘김의 쉼은 0.3~1.0초였다 (실험 영상 분석).
@@ -581,7 +653,7 @@ async function startInterpret(msg, stream, testAudio) {
     // 원어를 한글로 받아 적은 짧은 결과("씽킹")는 같은 시각에 원어가 인식됐으면 버린다
     if (I.merger.norm(text).length <= 6 && performance.now() - I.otherAt < 2500) { debug("drop-short", text); return; }
     const added = I.merger.add(text);
-    if (added.length) send({ type: "draft", text: added.join(" "), reason: "final" });
+    if (added.length) sink.target(added.join(" "));
   };
   const onOther = (text, confidence = 1) => {
     if (I.stopped || !text) return;
@@ -590,7 +662,7 @@ async function startInterpret(msg, stream, testAudio) {
     // (실측: 실제 영어 0.93~0.97, 엉터리 0.71~0.89 — 높은 엉터리도 있어 완전히 거를 수는 없다)
     if (confidence < 0.8) return;
     I.otherAt = performance.now();
-    send({ type: "live_other", text });
+    sink.other(text);
   };
   let A = session(target, true, onTarget, 0);
   let O = session(other, true, onOther, 0);
@@ -642,145 +714,170 @@ function stopInterpret() {
 }
 
 // ───────────── 이중 STT 모드 ─────────────
-// 영어 STT + Chrome 내장 번역, 한글 STT 를 병렬로 돌리고 각기 자막 조각을 만든다.
-// 조작자가 둘을 나란히 보고 고른 쪽만 자막 화면에 낸다.
-// InterpretMerger 는 쓰지 않는다 — 각 언어가 자기 속도로 조각을 만들고 서로 독립적이다.
-// Chrome 인식기는 다른 언어에 무응답이라, 강사(영어) 구간은 영어만·통역(한글) 구간은 한글만 자연스럽게 잡힌다.
+// 강사 말(영어) 인식 + Chrome 내장 번역, 통역(한글) 인식을 둘 다 자막 조각으로 만든다. 조작자가 차례마다 고른 쪽만 자막에 낸다.
+// 인식은 순차통역 모드와 같은 방식(쉼마다 세션 새로 열기 + 합치기)을 쓴다. 한 세션에 두 언어가 섞이면 한국어 인식기가
+// 앞 몇 단어 뒤 멈추기 때문이다(연속 세션 하나로 시험했을 때 2분 동안 한글 조각이 거의 나오지 않았다).
+
+// ── 이중 STT 짝짓기 시작
+// 바통 넘김 단위로 짝을 짓는다: 강사 말이 나온 뒤 오는 통역은 같은 차례, 통역 뒤에 다시 강사 말이 나오면 새 차례.
+// 순차통역에서 통역은 강사 말이 끝난 뒤 몇 초 늦게 오므로 시간 창(예: 2초)으로는 짝이 맞지 않는다.
+function dualTurn(D, side) {
+  if (side === "translate" && D.lastSide === "interpret") D.turn++;
+  D.lastSide = side;
+  return D.turn;
+}
+// ── 이중 STT 짝짓기 끝
 
 let dual = null;
-let dualGen = 0;
 
 async function startDual(msg, stream, testAudio) {
   stopDual();
-  const gen = dualGen;
-  const target = msg.lang || "ko-KR";   // 통역(한국어)
-  const other = msg.other_lang || "en-US"; // 강사(영어)
+  const target = msg.lang || "ko-KR";       // 통역 언어
+  const other = msg.other_lang || "en-US";  // 강사 언어
 
-  // Chrome 내장 번역기 (영어 → 한국어). 없으면 원문 그대로.
-  let builtin = null;
-  try { builtin = await createBuiltinTranslator(other.split("-")[0], target.split("-")[0]); }
-  catch (err) { report("dual-translator", err.message); }
-  if (gen !== dualGen) { builtin?.destroy?.(); return; }
+  // Chrome 내장 번역기 (강사 언어 → 통역 언어). 없으면 원문 그대로 보낸다.
+  // 만들기를 기다리지 않고 인식부터 시작한다 — 모델이 없으면 create() 가 실패하기까지 10초쯤 걸려 그동안 말을 놓친다.
+  const D = { builtin: null, turn: 1, lastSide: "", queue: Promise.resolve() };
+  D.queue = createBuiltinTranslator(other.split("-")[0], target.split("-")[0])
+    .then((t) => { if (dual === D) D.builtin = t; else t?.destroy?.(); })
+    .catch((err) => report("dual-translator", err.message));
+  dual = D;
+  // 강사 말도 겹쳐 도는 세션에서 같은 구간이 두 번 나오므로("chapter chapter 15") 같은 방식으로 합쳐 새 말만 받는다
+  const otherMerger = new InterpretMerger(other);
+  await startInterpret(msg, stream, testAudio, {
+    target: (text) => {
+      if (dual !== D) return;
+      send({ type: "draft", text, reason: "final", side: "interpret", pair_id: dualTurn(D, "interpret") });
+    },
+    other: (raw) => {
+      if (dual !== D) return;
+      const text = otherMerger.add(raw).join(" ");
+      if (!text) return;
+      const pair = dualTurn(D, "translate");
+      // 번역이 끝나는 순서가 말한 순서와 어긋나지 않게 차례로 처리한다
+      D.queue = D.queue.then(async () => {
+        let translated = "";
+        if (D.builtin) { try { translated = await D.builtin.translate(text); } catch (_) {} }
+        if (dual === D) send({ type: "draft", text: translated || text, reason: "final", side: "translate", pair_id: pair, source: text });
+      });
+    },
+  });
+}
 
-  const mkSide = (lang, side, pairSide) => {
-    const korean = String(lang).startsWith("ko");
-    const track = stream.getAudioTracks()[0];
-    const r = newRecognition(lang);
-    if (msg.local) r.processLocally = true;
-    const L = { rec: r, stream, testAudio, korean, side, pairSide,
-                maxMs: msg.max_ms || 4000, pauseMs: msg.pause_ms || 700, stableMs: msg.stable_ms || 800,
-                lastEmit: performance.now(), lastChange: performance.now() };
-    resetLiveSession(L);
-    const restarter = makeRestarter(() => dual !== null && (dual.Lko === L || dual.Len === L), () => r.start(track), () => {
-      stopDual();
-      send({ type: "live_stopped", reason: msg.local ? LOCAL_GIVE_UP : "자막 인식 오류가 반복되어 멈췄습니다." });
-    });
-    r.onresult = (e) => { restarter.ok(); onDualResult(L, e); };
-    r.onerror = (e) => { restarter.error(e.error); if (!BENIGN_ERRORS.has(e.error)) report("dual", e.error); };
-    r.onend = () => { emitDual(L, L.words.length, "pause"); resetLiveSession(L); sendLivePreview(L); restarter.ended(); };
-    L.timer = setInterval(() => evaluateDual(L), 200);
-    restarter.begin();
-    return L;
-  };
+function stopDual() {
+  const D = dual;
+  if (!D) return;
+  dual = null;
+  D.builtin?.destroy?.();
+}
 
-  const Lko = mkSide(target, "interpret", "interpret");
-  const Len = mkSide(other, "translate", "translate");
+// ───────────── Whisper 엔진 (Groq) ─────────────
+// Chrome 인식 대신 쓰는 대체 엔진. 소리를 말 토막(5~10초)으로 잘라 WAV 로 서버에 보내고, 서버가 Groq Whisper 로 받아써 조각으로 넣는다.
+// 무료 한도(분당 20회, 시간당 소리 7,200초)와 요금(한 번에 최소 10초)에 맞춰 토막을 5초보다 짧게 자르지 않는다.
+// Chrome 인식보다 늦지만(토막 길이 + 받아쓰기 1초 안팎) 구글 인식이 막히거나 자주 끊기는 현장에서 자막을 이어 갈 수 있다.
 
-  dual = { Lko, Len, stream, testAudio, builtin, stopped: false, pairSeq: 0, lastEnPair: 0, lastEnAt: 0, lastKoPair: 0 };
+// ── Whisper 토막 나누기 시작
+const WHISPER_RATE = 16000;
+const WHISPER_MIN_MS = 5000, WHISPER_MAX_MS = 10000;
+const WHISPER_THRESHOLD = 0.01;  // 이보다 작은 소리 크기(RMS)는 쉼
+const WHISPER_MIN_VOICED_MS = 300;  // 말소리가 이만큼도 없는 토막은 보내지 않는다 (Whisper 가 지어내는 것과 한도 낭비를 막는다)
+const WHISPER_IDLE_DROP_MS = 2000;  // 말소리 없이 이만큼 쌓이면 버린다
+const WHISPER_LOOKBACK_MS = 2000;   // 쉼 없이 길어지면 최근 이만큼 안에서 가장 조용한 곳을 찾는다
 
+function voicedMsOf(frames) { return frames.reduce((acc, f) => acc + (f.voiced ? f.ms : 0), 0); }
+
+// 프레임(Float32Array)을 받아 쌓다가 자를 때가 되면 onSegment(합친 소리)를 부른다.
+// 쉼(pauseMs)에서 자르고, 쉼 없이 길어지면 최근 2초 안에서 가장 조용한 프레임 뒤를 잘라 단어가 반으로 갈리지 않게 한다.
+class WhisperSegmenter {
+  constructor(rate, pauseMs, onSegment) {
+    this.rate = rate; this.pauseMs = pauseMs; this.onSegment = onSegment;
+    this.frames = []; this.samples = 0; this.voicedMs = 0; this.silentMs = 0;
+  }
+  push(data) {
+    let sum = 0;
+    for (const v of data) sum += v * v;
+    const rms = Math.sqrt(sum / data.length), ms = (data.length / this.rate) * 1000;
+    const voiced = rms > WHISPER_THRESHOLD;
+    this.frames.push({ data, rms, voiced, ms });
+    this.samples += data.length;
+    if (voiced) { this.voicedMs += ms; this.silentMs = 0; } else this.silentMs += ms;
+    const lenMs = (this.samples / this.rate) * 1000;
+    if (!this.voicedMs && lenMs >= WHISPER_IDLE_DROP_MS) { this.reset([]); return; }
+    if (lenMs >= WHISPER_MIN_MS && this.silentMs >= this.pauseMs) this.cut(this.frames.length);
+    else if (lenMs >= WHISPER_MAX_MS) {
+      const look = Math.max(1, Math.round(WHISPER_LOOKBACK_MS / ms));
+      let best = this.frames.length - 1;
+      for (let i = this.frames.length - 1; i >= Math.max(0, this.frames.length - look); i--) if (this.frames[i].rms < this.frames[best].rms) best = i;
+      this.cut(best + 1);
+    }
+  }
+  flush() { if (this.frames.length) this.cut(this.frames.length); }
+  cut(n) {
+    const head = this.frames.slice(0, n), rest = this.frames.slice(n);
+    if (voicedMsOf(head) >= WHISPER_MIN_VOICED_MS) {
+      const out = new Float32Array(head.reduce((acc, f) => acc + f.data.length, 0));
+      let at = 0;
+      for (const f of head) { out.set(f.data, at); at += f.data.length; }
+      this.onSegment(out);
+    }
+    this.reset(rest);
+  }
+  reset(rest) {
+    this.frames = rest;
+    this.samples = rest.reduce((acc, f) => acc + f.data.length, 0);
+    this.voicedMs = voicedMsOf(rest);
+    this.silentMs = 0;
+  }
+}
+
+// 16비트 모노 WAV
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 0x7fff, true);
+  return buf;
+}
+// ── Whisper 토막 나누기 끝
+
+let whisper = null;
+
+function startWhisper(msg, stream, testAudio) {
+  stopWhisper();
+  // AudioContext 를 16kHz 로 열면 Chrome 이 입력을 그 속도로 바꿔 준다 (Whisper 는 16kHz 모노로 받아쓴다)
+  const ctx = new AudioContext({ sampleRate: WHISPER_RATE });
+  const src = ctx.createMediaStreamSource(stream);
+  const proc = ctx.createScriptProcessor(4096, 1, 1);
+  const W = { ctx, stream, testAudio, proc };
+  W.seg = new WhisperSegmenter(ctx.sampleRate, msg.pause_ms || 600, (samples) => {
+    if (whisper === W && ws && ws.readyState === WebSocket.OPEN) ws.send(encodeWav(samples, ctx.sampleRate));
+  });
+  whisper = W;
+  proc.onaudioprocess = (e) => { if (whisper === W) W.seg.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+  src.connect(proc);
+  proc.connect(ctx.destination);  // ScriptProcessor 는 출력에 이어야 돈다 (출력은 비워 두므로 소리는 나지 않는다)
+  send({ type: "live_preview", text: "" });
   if (testAudio) testAudio.onended = () => {
-    if (dual && dual.stopped) return;
-    stopDual();
+    if (whisper !== W) return;
+    W.seg.flush();
+    stopWhisper();
     send({ type: "live_stopped", reason: "테스트 소리가 끝났습니다." });
   };
 }
 
-function onDualResult(L, e) {
-  const finals = [], interims = [];
-  for (let i = 0; i < e.results.length; i++) {
-    const words = e.results[i][0].transcript.trim().split(/\s+/).filter(Boolean);
-    (e.results[i].isFinal ? finals : interims).push(...words);
-  }
-  const words = finals.concat(interims);
-  const now = performance.now();
-  let d = 0;
-  while (d < words.length && d < L.words.length && words[d] === L.words[d]) d++;
-  const changed = d < words.length || words.length !== L.words.length;
-  L.since = L.since.slice(0, d).concat(words.slice(d).map(() => now));
-  L.words = words;
-  L.finalCount = finals.length;
-  realignLive(L);
-  if (changed) L.lastChange = now;
-  evaluateDual(L);
-}
-
-// 각 언어가 자기 규칙으로 조각을 자른다.
-// 한국어: 어미(BOUNDARY) + 문장 확정 + 말 멈춤 + 최대 대기
-// 영어: 문장부호 + 말 멈춤 + 최대 대기 (어미 규칙 없음)
-function evaluateDual(L) {
-  const now = performance.now();
-  let stable = L.emitted;
-  while (stable < L.words.length && (stable < L.finalCount || now - L.since[stable] >= L.stableMs)) stable++;
-  const pending = L.words.length - L.emitted;
-  if (pending > 0) {
-    const sinceEmit = now - L.lastEmit;
-    const cut = L.korean ? lastBoundary(L, stable) : -1;
-    if (L.finalCount === L.words.length && stable === L.words.length) emitDual(L, stable, "final");
-    else if (now - L.lastChange >= L.pauseMs) emitDual(L, L.words.length, "pause");
-    else if (cut > 0 && sinceEmit >= MIN_GAP_MS) emitDual(L, cut, "boundary");
-    else if (sinceEmit >= L.maxMs && stable > L.emitted) emitDual(L, cut > 0 ? cut : stable, "max");
-  }
-  sendLivePreview(L);
-}
-
-async function emitDual(L, upto, reason) {
-  if (upto <= L.emitted) return;
-  const parts = pendingWords(L, upto);
-  L.emitted = upto;
-  L.partial = 0;
-  L.emittedChars += parts.join("").length;
-  if (!parts.length) return;
-  L.lastEmit = performance.now();
-  const text = parts.join(" ");
-  const D = dual;
-  if (!D || D.stopped) return;
-
-  if (L.side === "translate") {
-    // 영어 STT → Chrome 내장 번역 → 한국어 자막 조각
-    D.pairSeq++;
-    D.lastEnPair = D.pairSeq;
-    D.lastEnAt = performance.now();
-    let ko = text;
-    if (D.builtin) {
-      try { ko = await D.builtin.translate(text); } catch (_) {}
-      if (!ko) ko = text;
-    }
-    if (!D.stopped) send({ type: "draft", text: ko, reason, side: "translate", pair_id: D.lastEnPair, source: text });
-    // source(영어 원어)는 server.py 에서 다루지 않으므로 live.py Chunk.source 에 보관
-    // (조작자 화면에서 원어를 참고로 보여 줄 수 있음)
-  } else {
-    // 한글 STT → 통역 자막 조각
-    // 최근 영어 조각이 있으면 같은 pair_id 로 짝짓는다 (2초 내)
-    const pair = (performance.now() - D.lastEnAt < 2000) ? D.lastEnPair : ++D.pairSeq;
-    D.lastKoPair = pair;
-    send({ type: "draft", text, reason, side: "interpret", pair_id: pair });
-  }
-}
-
-function stopDual() {
-  dualGen++;
-  const D = dual;
-  if (!D) return;
-  dual = null;
-  D.stopped = true;
-  for (const L of [D.Lko, D.Len]) {
-    clearInterval(L.timer);
-    L.rec.onend = null;
-    try { L.rec.abort(); } catch (_) {}
-  }
-  D.builtin?.destroy?.();
-  D.stream.getTracks().forEach((t) => t.stop());
-  if (D.testAudio) { D.testAudio.onended = null; D.testAudio.pause(); D.testAudio.removeAttribute("src"); D.testAudio.load(); }
+function stopWhisper(flush = false) {
+  const W = whisper;
+  if (!W) return;
+  if (flush) W.seg.flush();
+  whisper = null;
+  W.proc.onaudioprocess = null;
+  try { W.proc.disconnect(); } catch (_) {}
+  W.ctx.close().catch(() => {});
+  W.stream.getTracks().forEach((t) => t.stop());
+  if (W.testAudio) { W.testAudio.onended = null; W.testAudio.pause(); W.testAudio.removeAttribute("src"); W.testAudio.load(); }
 }
 
 // ───────────── 서버 연결 ─────────────
@@ -826,7 +923,7 @@ function connect() {
       case "captions_start": startCaptions(msg.lang, msg.translator, msg.groq, msg.local, msg.translate, msg.target_lang || "ko-KR"); break;
       case "captions_stop": stopCaptions(); break;
       case "live_start": startLive(msg); break;
-      case "live_stop": stopLive(); break;
+      case "live_stop": stopLive(true); break;
       case "list_mics": send({ type: "mics", mics: await listMics() }); break;
       case "translation": applyGroqTranslation(msg.id, msg.ko); break;
     }

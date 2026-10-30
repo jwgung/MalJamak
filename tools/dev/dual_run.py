@@ -1,20 +1,22 @@
-"""dual 모드 e2e 시험: 유튜브 테스트 소리(3:00부터) → 이중 STT 자막 → 번역/통역 조각 수집.
-조작자 선택 시뮬레이션: 각 pair에서 번역 쪽을 내보내고 통역 쪽을 버린다 (번역 우선 시나리오).
+"""이중 STT(dual) 모드 시험: 유튜브 테스트 소리(3:00부터)로 번역/통역 조각을 모은다. 조작자 선택은 하지 않는다.
 
 용법: .venv/bin/python -I tools/dev/dual_run.py <유튜브 URL> <초> <out.json> [port]
+출력: items = 통역(한글 STT) 조각 (score_live.py 로 유튜브 한국어 자막과 비교), translate = 번역 조각,
+      pairs = 차례(pair_id)별 두 쪽 글
 """
 import asyncio, json, sys, aiohttp
 
 URL, SECONDS, OUT = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 PORT = int(sys.argv[4]) if len(sys.argv) > 4 else 8765
 
+
 async def main():
     async with aiohttp.ClientSession() as s:
-        # dual 모드로 설정
         await s.post(f"http://localhost:{PORT}/api/settings",
-                     json={"live": {"mode": "dual", "other_lang": "en-US", "review": "manual"}})
+                     json={"live": {"mode": "dual", "lang": "ko-KR", "other_lang": "en-US", "review": "manual"}})
         op = await s.ws_connect(f"http://localhost:{PORT}/ws?role=operator")
         state = {"items": [], "test": {}}
+
         async def read():
             async for m in op:
                 d = json.loads(m.data)
@@ -30,57 +32,30 @@ async def main():
         print("test:", state["test"].get("status"), state["test"].get("error", "")[:200], flush=True)
         if state["test"].get("status") != "ready":
             return
-
         await op.send_json({"cmd": "start", "test": True, "offset": 180})
-
-        # 각 pair 를 한 번만 처리 (번역 우선 시나리오)
-        handled = set()
-        sent, discarded = 0, 0
         try:
-            for _ in range(int(SECONDS * 5)):
-                await asyncio.sleep(0.2)
-                # pending pair 를 찾는다
-                pending = {}
-                for it in state["items"]:
-                    if it["status"] == "pending" and it.get("pair_id") is not None and it["side"]:
-                        pending.setdefault(it["pair_id"], {})[it["side"]] = it
-                for pair_id, sides in pending.items():
-                    if pair_id in handled:
-                        continue
-                    # 두 쪽이 모두 모였으면 처리 (번역 우선: 번역 send, 통역 discard)
-                    if "translate" in sides and "interpret" in sides:
-                        handled.add(pair_id)
-                        await op.send_json({"cmd": "discard", "id": sides["interpret"]["id"]})
-                        await op.send_json({"cmd": "send", "id": sides["translate"]["id"]})
-                        sent += 1; discarded += 1
+            await asyncio.sleep(SECONDS)
         finally:
             await op.send_json({"cmd": "stop"})
-            await asyncio.sleep(1)
+            await asyncio.sleep(1.5)
             task.cancel()
 
-        # 결과 정리
         items = state["items"]
-        pairs = {}
+        pairs: dict[int, dict] = {}
         for it in items:
-            if it.get("pair_id") is None:
-                continue
-            pairs.setdefault(it["pair_id"], {})[it["side"]] = it
+            if it.get("pair_id") is not None:
+                side = pairs.setdefault(it["pair_id"], {"translate": [], "source": [], "interpret": []})
+                side[it["side"]].append(it["text"])
+                if it["side"] == "translate":
+                    side["source"].append(it.get("source", ""))
         out = {
-            "sent": sent, "discarded": discarded,
-            "pairs": [
-                {
-                    "pair_id": pid,
-                    "translate": v.get("translate", {}).get("text", ""),
-                    "translate_source": v.get("translate", {}).get("source", ""),
-                    "interpret": v.get("interpret", {}).get("text", ""),
-                    "translate_status": v.get("translate", {}).get("status", ""),
-                    "interpret_status": v.get("interpret", {}).get("status", ""),
-                }
-                for pid, v in sorted(pairs.items())
-            ],
+            "items": [i for i in items if i.get("side") == "interpret"],
+            "translate": [i for i in items if i.get("side") == "translate"],
+            "pairs": [{"pair_id": k, **{n: " ".join(v) for n, v in p.items()}} for k, p in sorted(pairs.items())],
         }
         json.dump(out, open(OUT, "w"), ensure_ascii=False, indent=1)
-        print(f"done: {sent} sent (translate), {discarded} discarded (interpret), {len(pairs)} pairs total")
+        both = sum(1 for p in out["pairs"] if p["translate"] and p["interpret"])
+        print(f"done: 통역 {len(out['items'])}조각 · 번역 {len(out['translate'])}조각 · 차례 {len(pairs)}개 (두 쪽 다 있음 {both})")
         print("saved", OUT)
 
 asyncio.run(main())

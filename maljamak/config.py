@@ -41,20 +41,27 @@ DEFAULTS: dict = {
         # dual: 영어 STT+번역과 한글 STT를 둘 다 자막 조각으로, 조작자가 나란히 비교 후 고른다
         "mode": "normal",
         "other_lang": "en-US",  # 순차통역 모드에서 강사가 쓰는 원어 (교정 화면 참고용으로도 인식)
+        # cloud: Chrome 구글 인식, local: Chrome 기기 내 인식,
+        # whisper: Groq Whisper(대체 엔진 — Chrome 인식이 막히거나 끊길 때. Groq 키 필요, 일반 방식만, 5~10초 토막이라 늦다)
         "engine": "cloud",
         "mic": "",  # 믹서 출력을 받는 USB 오디오 인터페이스 등
         "voice_processing": False,  # 잡음 제거·자동 음량. 믹서 직결이면 끄는 게 낫다
         "review": "auto",  # auto: 카운트다운 후 자동 내보내기, manual: 조작자가 내보내야 나감
-        "countdown": 3.0,
+        "countdown": 2.0,
         # 조각은 자연스러운 지점(문장 끝·말 멈춤·어미)에서 자른다. 이 값들은 그 판단 기준이다.
-        "pause_seconds": 0.7,  # 이 시간 동안 새 말이 없으면 멈춘 것으로 보고 자른다
-        "max_wait_seconds": 4.0,  # 자를 지점이 없어도 이 시간이 지나면 자른다
+        # 기본값(쉼 0.6·최대 3·카운트다운 2초)은 말에서 자막까지 약 4초를 목표로 한다 (예전 0.7·4·3초는 약 5초)
+        # short: "~고, ~는데" 같은 어미에서도 잘라 빨리 나간다. sentence: 문장 끝 어미("~다, ~요")에서만 잘라 읽기 쉽다(최대 대기 8초 이상)
+        "chunk": "short",
+        "pause_seconds": 0.6,  # 이 시간 동안 새 말이 없으면 멈춘 것으로 보고 자른다
+        "max_wait_seconds": 3.0,  # 자를 지점이 없어도 이 시간이 지나면 자른다
         "stable_seconds": 0.8,  # 이 시간 동안 바뀌지 않은 단어만 안정된 것으로 본다
         "font_size": 56,
         "lines": 2,  # 방송 자막 관례상 2줄
+        "display_screen": "auto",  # auto: 보조 모니터(프로젝터)가 있으면 거기에 전체 화면으로, window: 늘 창으로 (옮겨서 더블클릭)
         "auto_break": False,  # 자동 줄바꿈(실험, 한국어 전용): 다음 조각이 오면 앞뒤 문맥으로 문장 경계를 추측. 기본은 조작자가 Shift+Enter
     },
-    "groq": {"api_key": "", "model": "openai/gpt-oss-120b"},
+    "groq": {"api_key": "", "model": "openai/gpt-oss-120b",
+             "stt_model": "whisper-large-v3"},  # 현장 자막 Whisper 엔진. turbo 는 싸지만 무료 한도는 같고 덜 정확하다
     "autostart": False,
 }
 

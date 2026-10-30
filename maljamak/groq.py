@@ -1,12 +1,33 @@
-"""확정 문장 전용 Groq 호출 (STT 교정, 자막 번역)."""
+"""Groq 호출: 확정 문장 교정·자막 번역(LLM)과 현장 자막 대체 인식 엔진(Whisper)."""
 
 import asyncio
 import os
+import re
 
 import aiohttp
 
 # VK_GROQ_URL 로 다른 OpenAI 호환 엔드포인트(또는 테스트 서버)를 쓸 수 있다.
 GROQ_URL = os.environ.get("VK_GROQ_URL", "https://api.groq.com/openai/v1/chat/completions")
+GROQ_STT_URL = os.environ.get("VK_GROQ_STT_URL", "https://api.groq.com/openai/v1/audio/transcriptions")
+
+# Whisper 는 말소리가 없거나 음악만 있는 구간에서 방송 끝인사 같은 글을 지어낸다. 결과가 통째로 이런 글이면 버린다.
+# 실제로도 하는 말("감사합니다")은 넣지 않는다 — 문장이 빠지는 것이 잘못 나오는 것보다 나쁘다.
+_HALLUCINATION = re.compile(
+    r"^\s*(시청해\s*주셔서\s*감사합니다|구독과\s*좋아요|(MBC|KBS|SBS)\s*뉴스\s*\S*\s*(입니다)?|Thanks? for watching)[\s.!。]*$",
+    re.IGNORECASE)
+
+
+def whisper_text(data: dict, no_speech: float = 0.6, min_logprob: float = -1.0) -> str:
+    """verbose_json 응답에서 말소리가 아닐 가능성이 높거나 확신이 아주 낮은 구간을 빼고 글을 잇는다."""
+    segments = data.get("segments")
+    if segments is None:
+        text = str(data.get("text") or "")
+    else:
+        text = " ".join(str(s.get("text") or "").strip() for s in segments
+                        if s.get("no_speech_prob", 0) <= no_speech and s.get("avg_logprob", 0) >= min_logprob)
+    text = " ".join(text.split())
+    return "" if _HALLUCINATION.match(text) else text
+
 
 # 프롬프트 안에서 쓸 언어 이름 (언어 코드 앞부분 → 이름). 목록에 없는 언어는 코드를 그대로 쓴다.
 LANG_NAMES = {
@@ -54,7 +75,7 @@ def translate_prompt(source: str, target: str = "ko-KR") -> str:
 
 
 class Groq:
-    """확정 문장 전용 Groq 호출. 실패하면 None 을 돌려 호출부가 원문/기본 경로를 쓰게 한다."""
+    """Groq 호출: 확정 문장 교정·번역과 Whisper 받아쓰기. 실패하면 None 을 돌려 호출부가 원문/기본 경로를 쓰게 한다."""
 
     def __init__(self, api_key: str, model: str, timeout: float):
         self.api_key = api_key
@@ -95,6 +116,37 @@ class Groq:
         if context:
             user = "직전 자막(참고용, 번역하지 말 것):\n" + "\n".join(context) + "\n\n번역할 문장:\n" + text
         return await self._chat(translate_prompt(source, target), user)
+
+    async def transcribe(self, wav: bytes, lang: str, prompt: str = "", model: str = "whisper-large-v3") -> str | None:
+        """현장 자막 대체 엔진: 말 한 토막(WAV)을 Whisper 로 받아쓴다. prompt 는 직전 자막(이어지는 말투·고유명사 표기).
+        한도(429)에 걸리면 알려 준 시간(최대 10초)만큼 기다렸다가 한 번 더 보낸다 — 문장이 통째로 빠지지 않게."""
+        if self._session is None:
+            self._session = aiohttp.ClientSession(timeout=self.timeout)
+        for attempt in range(2):
+            form = aiohttp.FormData()
+            form.add_field("file", wav, filename="speech.wav", content_type="audio/wav")
+            form.add_field("model", model)
+            form.add_field("language", str(lang or "ko").split("-")[0].lower())
+            form.add_field("response_format", "verbose_json")
+            form.add_field("temperature", "0")
+            if prompt:
+                form.add_field("prompt", prompt)
+            try:
+                async with self._session.post(GROQ_STT_URL, data=form, timeout=aiohttp.ClientTimeout(total=20),
+                                              headers={"Authorization": f"Bearer {self.api_key}"}) as resp:
+                    if resp.status == 429 and attempt == 0:
+                        wait = min(10.0, float(resp.headers.get("retry-after") or 2))
+                        print(f"[groq] 음성 인식 한도, {wait:.0f}초 뒤 다시 보냄", flush=True)
+                        await asyncio.sleep(wait)
+                        continue
+                    if resp.status != 200:
+                        print(f"[groq] STT HTTP {resp.status}: {(await resp.text())[:200]}", flush=True)
+                        return None
+                    return whisper_text(await resp.json())
+            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as err:
+                print(f"[groq] STT {type(err).__name__}: {err}", flush=True)
+                return None
+        return None
 
     async def close(self) -> None:
         if self._session:

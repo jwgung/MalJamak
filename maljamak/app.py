@@ -16,6 +16,7 @@ from .autostart import set_autostart
 from .chrome import ChromeEngine, find_chrome
 from .config import Config, config_dir
 from .hotkey import Hotkey
+from .screens import list_screens, pick_projector, window_args
 from .server import Hub, build_app
 
 
@@ -132,14 +133,23 @@ class App:
         webbrowser.open(f"http://localhost:{self.port}/operator")
 
     def open_display(self) -> None:
-        """자막 화면은 주소창 없는 Chrome 앱 창으로 띄운다. 프로젝터로 옮겨 더블클릭하면 전체 화면."""
+        """자막 화면은 주소창 없는 Chrome 앱 창으로 띄운다.
+        보조 모니터(프로젝터)가 있고 "자동"이면 그 모니터에 전체 화면으로 띄운다. 없으면 창으로 띄우고, 사용자가 옮겨 더블클릭한다."""
         url = f"http://localhost:{self.port}/display"
         chrome = find_chrome()
-        if chrome:
+        if not chrome:
+            webbrowser.open(url)
+            return
+        projector = pick_projector(list_screens()) if self.config.get()["live"]["display_screen"] == "auto" else None
+        if projector is None:
             subprocess.Popen([chrome, f"--app={url}", "--new-window"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        else:
-            webbrowser.open(url)
+            return
+        # 이미 떠 있는 평소 Chrome 에 창을 열면 위치·전체 화면 인자가 무시되므로 자막 화면 전용 프로필로 따로 띄운다
+        print(f"[app] 자막 화면을 보조 모니터에 띄움: {projector}", flush=True)
+        subprocess.Popen([chrome, f"--user-data-dir={config_dir() / 'display-profile'}", "--no-first-run",
+                          "--no-default-browser-check", f"--app={url}", *window_args(projector)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # ───────── 훅 ─────────
 

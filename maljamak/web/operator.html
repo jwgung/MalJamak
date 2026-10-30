@@ -43,6 +43,11 @@
   .item .acts { display: flex; gap: 4px; flex-shrink: 0; opacity: 0; pointer-events: none; transition: opacity .12s; }
   .item:hover .acts, .item.focused .acts { opacity: 1; pointer-events: auto; }
   .item .srcline { flex-basis: 100%; font-size: 12px; color: var(--text-3); padding: 0 6px; }
+  /* Chrome 이 나간 말을 나중에 고쳐 확정함: 조작자가 반영하거나 무시한다 */
+  .item .revline { flex-basis: 100%; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--warn);
+                   padding: 2px 6px; font-weight: 400; }
+  .item .revline[hidden] { display: none; }
+  .item .revline b { font-weight: 600; color: var(--text); }
   .item .bar { display: none; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; }
   .item .bar i { display: block; height: 100%; background: var(--warn); }
   /* 조작자 줄바꿈(Shift+Enter): 이 조각 뒤에서 자막 화면 줄이 바뀐다 */
@@ -184,7 +189,7 @@
         <input id="manual" type="text" placeholder="직접 입력 — 빠진 말을 쓰고 Enter 로 바로 내보내기">
         <span id="manualAt"></span>
       </div>
-      <div id="keys"><kbd>Enter</kbd> 내보내기 · <kbd>1</kbd><kbd>2</kbd> 번역/통역 선택 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기 · <kbd>Ctrl+Space</kbd> 멈춤</div>
+      <div id="keys"><kbd>Enter</kbd> 내보내기 · <kbd>Alt+1</kbd><kbd>Alt+2</kbd> 이중 STT 번역/통역으로 내보내기 · <kbd>Ctrl+Enter</kbd> 여기까지 · <kbd>Shift+Enter</kbd> 줄바꿈 · <kbd>Esc</kbd> 버리기 · <kbd>Ctrl+Space</kbd> 멈춤</div>
     </div>
   </div>
   <aside class="panel" id="panel">
@@ -215,6 +220,10 @@
       </select>
       <label class="field"><span>카운트다운 (초)</span><input id="countdown" type="number" min="1" max="30" step="0.5"></label>
       <small class="hint">고치기 시작하면 카운트다운이 멈춥니다.</small>
+      <label class="field"><span>조각 크기</span><select id="chunk">
+        <option value="short">짧게 — "~고, ~는데"에서도 잘라 빨리</option>
+        <option value="sentence">문장 단위 — "~다, ~요"에서만 잘라 읽기 쉽게</option></select></label>
+      <small class="hint">문장 단위는 조각이 적고 길어 검토할 횟수가 줄지만 늦게 나옵니다. 일반 방식·한국어에서 쓰이고, 자막을 다시 시작해야 적용됩니다.</small>
     </section>
     <section>
       <div class="section-title">소리</div>
@@ -222,9 +231,10 @@
       <div class="two">
         <label class="field"><span id="langLabel">자막 언어</span><select id="lang"></select>
           <small id="langNote" class="hint" hidden>한국어가 아니면 말이 멈출 때·최대 대기 시간에만 자르고, 줄바꿈은 Shift+Enter 로 합니다 (어미 규칙·자동 줄바꿈은 한국어 전용).</small></label>
-        <label class="field"><span>인식 방식</span><select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option></select></label>
+        <label class="field"><span>인식 방식</span><select id="engine"><option value="cloud">온라인 (정확)</option><option value="local">오프라인 (기기 내)</option><option value="whisper">Groq Whisper (대체)</option></select></label>
       </div>
       <label class="field"><span>통화용 보정 (잡음 제거·자동 음량)</span><select id="processing"><option value="false">끄기 — 믹서 직결</option><option value="true">켜기 — 공간 마이크</option></select></label>
+      <small class="hint" id="whisperNote" hidden>Groq Whisper 는 구글 인식이 막히거나 자주 끊길 때 쓰는 대체 엔진입니다. Groq 키가 필요하고, 일반 방식에서만 되며, 말을 5~10초 토막으로 받아써 자막이 더 늦게 나옵니다.</small>
       <small class="hint">소리 입력·언어·인식 방식·조각 설정은 자막을 다시 시작해야 적용됩니다.</small>
     </section>
     <section>
@@ -251,6 +261,8 @@
         <label class="field"><span>글자 크기 (px)</span><input id="font" type="number" min="20" max="160" step="2"></label>
         <label class="field"><span>자막 줄 수</span><input id="lines" type="number" min="1" max="8"></label>
       </div>
+      <label class="field"><span>자막 화면 열기</span><select id="displayScreen"><option value="auto">보조 모니터(프로젝터)에 전체 화면 — 없으면 창</option><option value="window">늘 창으로 — 직접 옮겨 더블클릭</option></select>
+        <small class="hint">보조 모니터 자동 배치는 Windows 에서만 됩니다.</small></label>
       <label class="field"><span>자동 줄바꿈 (실험)</span><select id="autobreak"><option value="false">끄기 — Shift+Enter 로 직접</option><option value="true">켜기 — 앞뒤 문맥으로 추측</option></select></label>
     </section>
     <div id="file"></div>
@@ -261,8 +273,9 @@
   <div class="box card" role="dialog" aria-label="단축키">
     <h2>단축키</h2>
     <dl>
-      <dt><kbd>Enter</kbd></dt><dd>내보내기 (고친 내용 포함) — 이중 STT에서는 선택된 쪽(미선택 시 번역)</dd>
-      <dt><kbd>1</kbd> <kbd>2</kbd></dt><dd>이중 STT: 번역 / 통역 선택</dd>
+      <dt><kbd>Enter</kbd></dt><dd>내보내기 (고친 내용 포함) — 이중 STT에서는 이 줄의 쪽으로 차례를 고른다</dd>
+      <dt><kbd>1</kbd> <kbd>2</kbd></dt><dd>이중 STT: 번역 / 통역 선택 (입력칸 밖에서)</dd>
+      <dt><kbd>Alt</kbd>+<kbd>1</kbd> <kbd>2</kbd></dt><dd>이중 STT: 이 차례를 번역 / 통역으로 바로 내보내기 (다른 쪽은 버림, 같은 차례에 늦게 오는 다른 쪽도 버림)</dd>
       <dt><kbd>Shift</kbd>+<kbd>Enter</kbd></dt><dd>내보내고 줄바꿈 (나간 조각에서는 줄바꿈 켜기/끄기)</dd>
       <dt><kbd>Esc</kbd></dt><dd>버리기</dd>
       <dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd>조각 이동</dd>
@@ -411,7 +424,8 @@ function renderHeader() {
   $("btnLive").textContent = status.live ? "자막 정지" : "자막 시작";
   $("btnLive").className = `btn lg ${status.live ? "danger" : "primary"}`;
   // 무엇으로 인식 중인지 늘 보여 준다 (테스트 영상인 줄 알았는데 마이크로 도는 일이 없게)
-  $("stateText").textContent = status.live ? `인식 중 · ${status.live_test ? "테스트 영상" : "마이크"}${status.mode === "interpret" ? " · 순차통역" : ""}`
+  const modeName = ({ interpret: " · 순차통역", dual: " · 이중 STT" }[status.mode] || "") + (status.recognizer === "whisper" ? " · Whisper" : "");
+  $("stateText").textContent = status.live ? `인식 중 · ${status.live_test ? "테스트 영상" : "마이크"}${modeName}`
                          : status.engine ? "대기" : "엔진 준비 중…";
   $("state").className = status.live ? "chip live" : status.engine ? "chip" : "chip warn";
   // 전체 일시정지: 자동 내보내기 중에만 쓸 수 있다. 멈춘 동안은 버튼과 상태 칩을 눈에 띄게.
@@ -431,7 +445,7 @@ function renderHeader() {
   if (document.activeElement !== $("mode")) $("mode").value = status.mode || "normal";
   updateLangNotes();
   // dual 모드: 강사 언어(other_lang)도 필요
-  $("otherWrap").hidden = !$("mode").value.match(/^(interpret|dual)$/);
+  $("otherWrap").hidden = !usesOtherLang();
   $("mode").disabled = $("otherLang").disabled = !!status.live;  // 방식은 시작 전에 정한다
   // dual 모드: 언어 레이블 조정
   if ($("mode").value === "dual") {
@@ -526,7 +540,24 @@ function makeRow(item) {
   dropBtn.onclick = () => { editing = false; send({ cmd: "discard", id: item.id }); };
   const srcline = document.createElement("div");
   srcline.className = "srcline";
-  const row = { el, input, bar: bar.firstChild, meta, brkmark, srcline, isEditing: () => editing };
+  const revline = document.createElement("div");
+  revline.className = "revline";
+  revline.hidden = true;
+  const revText = document.createElement("b");
+  const revApply = document.createElement("button");
+  revApply.className = "btn sm"; revApply.textContent = "반영";
+  const revDrop = document.createElement("button");
+  revDrop.className = "btn sm ghost"; revDrop.textContent = "무시";
+  revline.append("인식이 바뀜:", revText, revApply, revDrop);
+  el.append(revline);
+  revApply.onclick = () => {
+    const cur = rows.get(item.id).item;
+    editing = false;
+    // 나간 조각은 고친 내용으로 다시 내보내 자막 화면에 반영하고, 대기 조각은 글만 바꾼다
+    send({ cmd: cur.status === "sent" ? "send" : "update", id: item.id, text: cur.revision });
+  };
+  revDrop.onclick = () => send({ cmd: "dismiss_revision", id: item.id });
+  const row = { el, input, bar: bar.firstChild, meta, brkmark, srcline, revline, revText, isEditing: () => editing };
   rows.set(item.id, row);
   return row;
 }
@@ -543,6 +574,8 @@ function updateRow(row, item) {
   row.srcline.textContent = item.kind === "suggest" ? `원어: ${item.source}`
                            : (item.side === "translate" && item.source) ? `원어: ${item.source}` : "";
   if (item.kind === "suggest" && !item.text) row.input.placeholder = "번역하지 못했습니다(Groq 키 없음 등) — 원어를 보고 직접 써 주세요";
+  row.revline.hidden = !item.revision;
+  row.revText.textContent = item.revision || "";
   row.brkmark.textContent = item.break_after ? "↵" : "";
   if (!row.isEditing() && document.activeElement !== row.input) row.input.value = item.text;
   row.item = item;
@@ -719,9 +752,9 @@ function tick() {
 async function loadSettings() {
   const { settings } = await (await fetch("/api/settings")).json();
   const l = settings.live;
-  fillLangSelect($("lang"), l.lang); fillLangSelect($("otherLang"), l.other_lang); $("engine").value = l.engine;
+  fillLangSelect($("lang"), l.lang); fillLangSelect($("otherLang"), l.other_lang); $("engine").value = l.engine; $("whisperNote").hidden = l.engine !== "whisper";
   updateLangNotes(); $("processing").value = String(l.voice_processing);
-  $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines; $("autobreak").value = String(l.auto_break);
+  $("chunk").value = l.chunk; $("pause").value = l.pause_seconds; $("maxwait").value = l.max_wait_seconds; $("stable").value = l.stable_seconds; $("font").value = l.font_size; $("lines").value = l.lines; $("autobreak").value = String(l.auto_break); $("displayScreen").value = l.display_screen;
   try {
     const { mics } = await (await fetch("/api/sources")).json();
     mics.filter((m) => m.id !== "default" && m.id !== "communications")
@@ -736,7 +769,8 @@ async function save(patch) {
 }
 
 $("review").onchange = () => save({ review: $("review").value });
-$("mode").onchange = () => { $("otherWrap").hidden = $("mode").value !== "interpret"; updateLangNotes(); save({ mode: $("mode").value }); };
+function usesOtherLang() { return /^(interpret|dual)$/.test($("mode").value); }  // 강사 언어가 필요한 방식
+$("mode").onchange = () => { $("otherWrap").hidden = !usesOtherLang(); updateLangNotes(); save({ mode: $("mode").value }); };
 $("otherLang").onchange = () => save({ other_lang: $("otherLang").value });
 $("countdown").onchange = () => save({ countdown: Number($("countdown").value) });
 $("mic").onchange = () => save({ mic: $("mic").value });
@@ -753,8 +787,10 @@ function updateLangNotes() {
   if (!korean) $("autobreak").title = "자동 줄바꿈은 한국어 전용입니다";
   else if (mode === "dual") $("autobreak").title = "이중 STT 모드에서는 자동 줄바꿈을 쓸 수 없습니다";
 }
-$("engine").onchange = () => save({ engine: $("engine").value });
+$("engine").onchange = () => { $("whisperNote").hidden = $("engine").value !== "whisper"; save({ engine: $("engine").value }); };
 $("processing").onchange = () => save({ voice_processing: $("processing").value === "true" });
+$("chunk").onchange = () => save({ chunk: $("chunk").value });
+$("displayScreen").onchange = () => save({ display_screen: $("displayScreen").value });
 $("pause").onchange = () => save({ pause_seconds: Number($("pause").value) });
 $("maxwait").onchange = () => save({ max_wait_seconds: Number($("maxwait").value) });
 $("stable").onchange = () => save({ stable_seconds: Number($("stable").value) });
@@ -799,16 +835,20 @@ function focusedPair() {
   return { pairId, wrapper, pairItems };
 }
 
+// 이 차례를 그 쪽으로 고른다 (서버가 고른 쪽을 내보내고 다른 쪽은 버린다). id·text 는 고친 내용이 있는 줄
+function chooseSide(pairId, side, id, text) {
+  const msg = { cmd: "choose", pair_id: pairId, side };
+  if (id != null) Object.assign(msg, { id, text });
+  send(msg);
+  moveFocus(1, true);
+}
+
 function dualSendSelected(pairId) {
   const side = dualSelected.get(pairId);
   const item = items.find((i) => i.pair_id === pairId && i.side === side && i.status === "pending");
   if (!item) return false;
   const row = rows.get(item.id);
-  for (const other of items.filter((i) => i.pair_id === pairId && i.status === "pending" && i.id !== item.id)) {
-    send({ cmd: "discard", id: other.id });
-  }
-  send({ cmd: "send", id: item.id, text: row ? row.input.value : item.text });
-  moveFocus(1, true);
+  chooseSide(pairId, side, item.id, row ? row.input.value : item.text);
   return true;
 }
 
@@ -816,6 +856,18 @@ document.addEventListener("keydown", (e) => {
   // 텍스트 입력칸 안에서 쓰면 number·Enter 가 조각 조작으로 새지 않게
   const inText = e.target.classList?.contains("text") || e.target.id === "manual";
 
+  // dual: Alt+1·Alt+2 는 입력칸 안에서도 바로 그 쪽으로 이 차례를 내보낸다 (고친 내용 포함)
+  if (status.mode === "dual" && e.altKey && (e.code === "Digit1" || e.code === "Digit2")) {
+    const fp = focusedPair();
+    if (fp) {
+      e.preventDefault();
+      const side = e.code === "Digit1" ? "translate" : "interpret";
+      const row = rows.get(focusedId);
+      const own = row && row.item.side === side;
+      chooseSide(fp.pairId, side, own ? row.item.id : null, own ? row.input.value : null);
+      return;
+    }
+  }
   // dual: 1·2 번으로 번역/통역 선택 (텍스트 편집 중이면 무시)
   if (status.mode === "dual" && !inText && (e.key === "1" || e.key === "2")) {
     const fp = focusedPair();
