@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
-const html = readFileSync(new URL("../voicekb/web/engine.html", import.meta.url), "utf8");
+const html = readFileSync(new URL("../maljamak/web/engine.html", import.meta.url), "utf8");
 const js = html.match(/<script>([\s\S]*)<\/script>/)[1];
 const body = js.slice(js.indexOf("const MIN_CHUNK_WORDS"), js.indexOf("async function startLive"));
 const file = join(mkdtempSync(join(tmpdir(), "chunker-")), "chunker.mjs");

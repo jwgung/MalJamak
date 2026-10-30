@@ -58,6 +58,12 @@ class App:
             return
         self.engine.start()
         self._apply_hotkey(self.config.get())
+        if self.config.get()["autostart"]:
+            # 예전 이름(VoiceKeyboard)이나 예전 설치 위치로 등록된 자동 실행을 지금 실행 파일로 고친다.
+            try:
+                set_autostart(True)
+            except Exception as err:
+                print(f"[app] 자동 실행 갱신 실패: {err}", flush=True)
         print(f"[app] 실행 중 — 설정: http://localhost:{self.port}/settings", flush=True)
 
         if self.use_tray:

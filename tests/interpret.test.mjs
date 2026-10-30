@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
 
-const html = readFileSync(new URL("../voicekb/web/engine.html", import.meta.url), "utf8");
+const html = readFileSync(new URL("../maljamak/web/engine.html", import.meta.url), "utf8");
 const body = html.slice(html.indexOf("// ── 순차통역 합치기 시작"), html.indexOf("// ── 순차통역 합치기 끝"));
 const file = join(mkdtempSync(join(tmpdir(), "interp-")), "merger.mjs");
 writeFileSync(file, body + "\nexport { InterpretMerger };\n");

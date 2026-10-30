@@ -5,7 +5,8 @@ import plistlib
 import sys
 from pathlib import Path
 
-NAME = "VoiceKeyboard"
+NAME = "MalJamak"
+LEGACY_NAME = "VoiceKeyboard"  # 예전 이름으로 등록된 항목은 지운다
 SYSTEM = platform.system()
 
 
@@ -25,27 +26,35 @@ def set_autostart(enabled: bool) -> None:
 
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
                              0, winreg.KEY_SET_VALUE)
+        def delete(name: str) -> None:
+            try:
+                winreg.DeleteValue(key, name)
+            except FileNotFoundError:
+                pass
+
         with key:
+            delete(LEGACY_NAME)
             if enabled:
                 winreg.SetValueEx(key, NAME, 0, winreg.REG_SZ, " ".join(f'"{c}"' for c in cmd))
             else:
-                try:
-                    winreg.DeleteValue(key, NAME)
-                except FileNotFoundError:
-                    pass
+                delete(NAME)
     elif SYSTEM == "Darwin":
-        path = Path.home() / "Library" / "LaunchAgents" / "com.voicekeyboard.plist"
+        agents = Path.home() / "Library" / "LaunchAgents"
+        (agents / "com.voicekeyboard.plist").unlink(missing_ok=True)
+        path = agents / "com.maljamak.plist"
         if enabled:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(plistlib.dumps({"Label": "com.voicekeyboard", "ProgramArguments": cmd, "RunAtLoad": True}))
+            path.write_bytes(plistlib.dumps({"Label": "com.maljamak", "ProgramArguments": cmd, "RunAtLoad": True}))
         else:
             path.unlink(missing_ok=True)
     else:
-        path = Path.home() / ".config" / "autostart" / "voice-keyboard.desktop"
+        folder = Path.home() / ".config" / "autostart"
+        (folder / "voice-keyboard.desktop").unlink(missing_ok=True)
+        path = folder / "maljamak.desktop"
         if enabled:
             path.parent.mkdir(parents=True, exist_ok=True)
             exec_line = " ".join(f'"{c}"' for c in cmd)
-            path.write_text(f"[Desktop Entry]\nType=Application\nName=Voice Keyboard\nExec={exec_line}\n"
+            path.write_text(f"[Desktop Entry]\nType=Application\nName=말자막\nExec={exec_line}\n"
                             "X-GNOME-Autostart-enabled=true\n", encoding="utf-8")
         else:
             path.unlink(missing_ok=True)

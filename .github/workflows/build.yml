@@ -35,7 +35,7 @@ jobs:
       - name: Build
         run: |
           python packaging/make_icon.py
-          pyinstaller --noconfirm packaging/VoiceKeyboard.spec
+          pyinstaller --noconfirm packaging/MalJamak.spec
 
       - name: Installer
         shell: pwsh
@@ -43,14 +43,14 @@ jobs:
           choco install innosetup -y --no-progress
           $version = if ("${{ github.ref }}" -like "refs/tags/v*") { "${{ github.ref_name }}".Substring(1) } else { "0.0.0" }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" packaging\installer.iss
-          Get-ChildItem dist\VoiceKeyboard-Setup-*.exe | ForEach-Object { "SETUP=$($_.FullName)" >> $env:GITHUB_ENV }
+          Get-ChildItem dist\MalJamak-Setup-*.exe | ForEach-Object { "SETUP=$($_.FullName)" >> $env:GITHUB_ENV }
 
       # 설치 파일이 무거워지지 않았는지 보려고 크기와 묶음 폴더의 큰 항목을 남긴다.
       - name: Size report
         shell: pwsh
         run: |
           "설치 파일: {0:N1} MB" -f ((Get-Item $env:SETUP).Length / 1MB)
-          $dir = "dist\VoiceKeyboard"
+          $dir = "dist\MalJamak"
           "묶음 폴더: {0:N1} MB" -f ((Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
           Get-ChildItem "$dir\_internal" | ForEach-Object {
             $size = if ($_.PSIsContainer) { (Get-ChildItem $_.FullName -Recurse -File | Measure-Object Length -Sum).Sum } else { $_.Length }
@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           Start-Process $env:SETUP -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
-          $exe = "$env:LOCALAPPDATA\Programs\VoiceKeyboard\VoiceKeyboard.exe"
+          $exe = "$env:LOCALAPPDATA\Programs\MalJamak\MalJamak.exe"
           if (-not (Test-Path $exe)) { throw "설치된 exe 가 없습니다: $exe" }
           $p = Start-Process $exe -ArgumentList "--no-tray","--dry-run" -PassThru
           $status = $null
@@ -72,16 +72,16 @@ jobs:
           }
           $status | ConvertTo-Json
           Stop-Process $p -Force
-          Get-Content "$env:APPDATA\VoiceKeyboard\app.log" -ErrorAction SilentlyContinue
+          Get-Content "$env:APPDATA\MalJamak\app.log" -ErrorAction SilentlyContinue
           if (-not $status.engine) { throw "엔진(Chrome)이 연결되지 않았습니다" }
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VoiceKeyboard-Setup
+          name: MalJamak-Setup
           path: ${{ env.SETUP }}
 
       - name: Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" "${{ env.SETUP }}" --prerelease --title "${{ github.ref_name }}" --notes "Windows 설치 파일. VoiceKeyboard-Setup 을 실행해 설치하세요. Google Chrome 이 설치되어 있어야 합니다."
+        run: gh release create "${{ github.ref_name }}" "${{ env.SETUP }}" --prerelease --title "${{ github.ref_name }}" --notes "Windows 설치 파일. MalJamak-Setup 을 실행해 설치하세요. Google Chrome 이 설치되어 있어야 합니다."

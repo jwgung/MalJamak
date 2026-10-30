@@ -4,11 +4,13 @@ import copy
 import json
 import os
 import platform
+import shutil
 import sys
 import threading
 from pathlib import Path
 
-APP_NAME = "VoiceKeyboard"
+APP_NAME = "MalJamak"
+LEGACY_NAMES = ("VoiceKeyboard", "voice-keyboard")  # 예전 이름의 설정 폴더 (Windows·macOS, Linux)
 
 DEFAULTS: dict = {
     "port": 8765,
@@ -58,20 +60,40 @@ DEFAULTS: dict = {
 
 
 def config_dir() -> Path:
+    return _config_dir(APP_NAME, "maljamak")
+
+
+def _config_dir(name: str, linux_name: str) -> Path:
     system = platform.system()
     if system == "Windows":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        return base / APP_NAME
+        return base / name
     if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / APP_NAME
+        return Path.home() / "Library" / "Application Support" / name
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "voice-keyboard"
+    return base / linux_name
+
+
+def migrate_legacy_dir() -> None:
+    """예전 이름(Voice Keyboard)의 설정 폴더를 새 이름으로 옮긴다. 설정·기록·Chrome 프로필·테스트 소리가 이어진다.
+    새 폴더가 이미 있으면 건드리지 않는다. 통째로 못 옮기면(파일이 잠김 등) 설정 파일만이라도 가져온다."""
+    old, new = _config_dir(*LEGACY_NAMES), config_dir()
+    if new.exists() or not old.is_dir():
+        return
+    try:
+        old.rename(new)
+        print(f"[config] 예전 설정 폴더를 옮김: {old} → {new}", flush=True)
+    except OSError as err:
+        print(f"[config] 예전 설정 폴더를 옮기지 못해 설정 파일만 복사: {err}", flush=True)
+        new.mkdir(parents=True, exist_ok=True)
+        if (old / "config.json").exists():
+            shutil.copy2(old / "config.json", new / "config.json")
 
 
 def resource_dir() -> Path:
     """웹 리소스 위치. PyInstaller 로 묶이면 압축 해제 폴더를 쓴다."""
     base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-    return base / "voicekb" / "web"
+    return base / "maljamak" / "web"
 
 
 def _merge(base: dict, override: dict) -> dict:

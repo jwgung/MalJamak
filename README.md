@@ -1,4 +1,4 @@
-# Voice Keyboard
+# 말자막
 
 트레이에 숨어서 도는 음성 입력기 겸 실시간 번역 자막.
 
@@ -60,8 +60,9 @@
 
 ## 설치 (Windows)
 
-[Releases](https://github.com/jwgung/voice-keyboard/releases)에서 `VoiceKeyboard-Setup-<버전>.exe`를 받아 실행한다.
-관리자 권한 없이 `%LOCALAPPDATA%\Programs\VoiceKeyboard`에 설치되고 시작 메뉴에 바로가기가 생긴다.
+[Releases](https://github.com/jwgung/maljamak/releases)에서 `MalJamak-Setup-<버전>.exe`를 받아 실행한다.
+관리자 권한 없이 `%LOCALAPPDATA%\Programs\MalJamak`에 설치되고 시작 메뉴에 바로가기가 생긴다.
+예전 이름(Voice Keyboard)으로 설치했다면 그대로 새 설치 파일을 실행하면 된다. 예전 설치본·바로가기는 지워지고, 설정·기록은 처음 실행할 때 새 설정 폴더로 옮겨진다.
 코드 서명이 없어 SmartScreen 경고가 뜨면 "추가 정보 → 실행".
 
 ## 소스에서 실행
@@ -81,7 +82,7 @@ python main.py
 - 외부 단축키 도구용: `curl -X POST http://localhost:8765/toggle`, `.../captions/toggle`
 
 옵션: `--no-tray`(트레이 없이), `--dry-run`(붙여넣지 않고 출력), `--port`.
-설정 파일: Windows `%APPDATA%\VoiceKeyboard\config.json`, macOS `~/Library/Application Support/VoiceKeyboard/`, Linux `~/.config/voice-keyboard/`.
+설정 파일: Windows `%APPDATA%\MalJamak\config.json`, macOS `~/Library/Application Support/MalJamak/`, Linux `~/.config/maljamak/`.
 
 ## OS별 준비
 

@@ -5,7 +5,7 @@ import time
 import unittest
 from pathlib import Path
 
-from voicekb.live import LiveSession, sentence_break
+from maljamak.live import LiveSession, sentence_break
 
 
 class OperatorLineBreakTest(unittest.TestCase):

@@ -85,7 +85,7 @@ def run_overlay(port: int, parent_pid: int | None = None) -> None:
     threading.Thread(target=_receiver, args=(port, inbox), daemon=True).start()
 
     root = tk.Tk()
-    root.title("Voice Keyboard 자막")
+    root.title("말자막 자막")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.attributes("-alpha", 0.85)

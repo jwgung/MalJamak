@@ -3,7 +3,7 @@
 import struct
 import unittest
 
-from voicekb.server import pack_audio
+from maljamak.server import pack_audio
 
 
 class AudioFrameTest(unittest.TestCase):

@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from voicekb import testsource
-from voicekb.testsource import TestSource
+from maljamak import testsource
+from maljamak.testsource import TestSource
 
 
 def fake_ytdlp(lines: list[str], code: int = 0) -> list[str]:

@@ -36,18 +36,18 @@ class Tray:
             pystray.MenuItem("설정…", lambda: app.open_settings(), default=True),
             pystray.MenuItem("종료", lambda: app.quit()),
         )
-        self.icon = pystray.Icon("voice-keyboard", _icon(COLORS["starting"]), "Voice Keyboard", menu)
+        self.icon = pystray.Icon("maljamak", _icon(COLORS["starting"]), "말자막", menu)
         self._images = {k: _icon(v) for k, v in COLORS.items()}
 
     def _state(self) -> tuple[str, str]:
         hub = self.app.hub
         if hub.engine is None:
-            return "starting", "Voice Keyboard — 엔진 준비 중"
+            return "starting", "말자막 — 엔진 준비 중"
         if hub.listening:
-            return "listening", "Voice Keyboard — 듣는 중"
+            return "listening", "말자막 — 듣는 중"
         if hub.captions_on or hub.live_on:
-            return "captions", "Voice Keyboard — 자막 중"
-        return "idle", "Voice Keyboard — 대기"
+            return "captions", "말자막 — 자막 중"
+        return "idle", "말자막 — 대기"
 
     def refresh(self) -> None:
         """서버 스레드에서 불린다. macOS 는 AppKit 을 메인 스레드에서만 만질 수 있어 넘겨 준다."""
@@ -69,7 +69,7 @@ class Tray:
 
     def notify(self, message: str) -> None:
         try:
-            self.icon.notify(message, "Voice Keyboard")
+            self.icon.notify(message, "말자막")
         except Exception:
             pass  # 알림을 지원하지 않는 환경
 

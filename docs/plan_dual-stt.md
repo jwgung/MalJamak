@@ -210,11 +210,11 @@ def add_draft(self, text, review, countdown, reason="", auto_break=False,
 
 | 파일 | 변경 |
 |---|---|
-| `voicekb/web/engine.html` | `startDual()` 새 함수, `startLive`에서 `mode==="dual"` 분기 |
-| `voicekb/live.py` | `Chunk.side`, `Chunk.pair_id`, `add_draft` 서명 확장 |
-| `voicekb/server.py` | `on_draft` 파라미터 확장, `set_live`에서 dual 전달 |
-| `voicekb/config.py` | `mode` 값에 `"dual"` 추가 (주석만) |
-| `voicekb/web/operator.html` | dual 모드 레이아웃 (pair 그룹핑, 두 줄, 선택) |
+| `maljamak/web/engine.html` | `startDual()` 새 함수, `startLive`에서 `mode==="dual"` 분기 |
+| `maljamak/live.py` | `Chunk.side`, `Chunk.pair_id`, `add_draft` 서명 확장 |
+| `maljamak/server.py` | `on_draft` 파라미터 확장, `set_live`에서 dual 전달 |
+| `maljamak/config.py` | `mode` 값에 `"dual"` 추가 (주석만) |
+| `maljamak/web/operator.html` | dual 모드 레이아웃 (pair 그룹핑, 두 줄, 선택) |
 | `tests/test_live.py` | dual 필드 테스트 |
 | `docs/handoff.md` | 진행 상황 기록 |
 
